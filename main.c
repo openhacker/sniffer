@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <assert.h>
 #include <sys/select.h>
+#include <sys/time.h>
 #include <sys/prctl.h>
 #include "pcap_reader.h"
 
@@ -22,12 +23,28 @@ static char temp_dir[128];
 
 static bool save_pcaps = false;
 
+static int max_queue_elements = 100;
+
+struct packet_element {
+	struct timeval enqueue_time;
+	struct block_info *block;
+	struct packet_element *next;
+	struct packet_element *prev;
+};
+	
+struct packet_queue {
+	struct packet_element *head;
+	struct packet_element *tail;
+	int blocks_in_queue;
+};
+
 struct tracers {
 	char *pipe;
 	int fd;		/* read fd for pipe */
 	int save_fd;	/* if -1, don't save, otherwise save all reads to this file for later analysis */
 	pid_t pid;
 	char *interface;
+	struct packet_queue packet_queue;
 	struct tracers *next;
 	struct tracers *prev;
 };
@@ -38,6 +55,16 @@ static int catch_child(int signo)
 {
 	sig_child_caught = true;	
 	return 0;
+}
+
+static void print_tracer_packets(struct tracers *this)
+{
+	struct packet_element *packet;
+
+	for(packet = this->packet_queue.tail; packet; packet = packet->prev) {
+		assert(enhanced_packet_block == packet->block->type);
+		print_enhanced_packet_block(packet->block);
+	}
 }
 
 
@@ -67,6 +94,7 @@ static void remove_tracer(pid_t pid)
 		this->next->prev = this->prev;
 	}
 
+	print_tracer_packets(this);
 	free(this->interface);
 	free(this->pipe);
 	fprintf(stderr, "freeing %d\n", pid);
@@ -109,7 +137,7 @@ static void new_tracer(int fd, const char *pipe, const char *interface, pid_t pi
 		char pcap_save_file[128];
 	
 		sprintf(pcap_save_file, "%s/save-%d", temp_dir, save_num++);
-		new->save_fd = open(pcap_save_file, O_WRONLY | O_CREAT);
+		new->save_fd = open(pcap_save_file, O_WRONLY | O_CREAT, 0666);
 		if(new->save_fd < 0) {
 			fprintf(stderr, "Cannot open %s: %s\n",  pcap_save_file, strerror(errno));
 			exit(1);
@@ -153,19 +181,23 @@ static int do_tracer(const char *interface)
 	pid_t pid;
 	int result;
 	int fd;
-	mode_t old_umask;
 
 	sprintf(named_pipe, "%s/%d", temp_dir,  num);
-#if 0
-	old_umask = umask(0);
-	result = mkfifo(named_pipe,  0666);
-	umask(old_umask);
-	assert(0 == result);
-#else
 	result = mknod(named_pipe, S_IFIFO | 0666, 0);
-#endif
+	if(result < 0) {
+		fprintf(stderr, "cannot create named pipe %s: %s\n",
+			named_pipe, strerror(errno));
+		exit(1);
+	}
+
 	/* open read fd read write -- even though never write with this fd -- so there's no blocking */	
 	fd = open(named_pipe, O_RDWR);
+	if(fd < 0) {
+		fprintf(stderr, "Cannot open named pipe %s: %s\n", 
+			named_pipe, strerror(errno));
+		exit(1);
+	}
+
 	pid = run_tracer(named_pipe, interface);
 	
 	new_tracer(fd, named_pipe, interface, pid);
@@ -173,27 +205,60 @@ static int do_tracer(const char *interface)
 	
 }
 
+static void free_packet_element(struct packet_element *this)
+{
+	free_block(this->block);
+	free(this);
+}
+	
+
+static void queue_packet(struct tracers *tracer, struct block_info *block)
+{
+	struct packet_element *this_element;
+	struct packet_queue *this_queue;
+
+	this_element = calloc(sizeof *this_element, 1);
+	assert(this_element != NULL);
+	gettimeofday(&this_element->enqueue_time, NULL);
+	this_queue = &tracer->packet_queue;
+	this_element->block = block;
+	
+	if(this_queue->head)
+		this_queue->head->prev = this_element;
+	this_element->next = this_queue->head;
+	this_queue->head = this_element;
+	if(0 == this_queue->blocks_in_queue) {
+		/* empty queue */
+		this_queue->tail = this_element;
+	} 
+	this_queue->blocks_in_queue++;
+	if(this_queue->blocks_in_queue > max_queue_elements) {
+		/* get rid of tail of queue */
+		struct packet_element *to_remove;
+
+		to_remove = this_queue->tail;
+		this_queue->tail = to_remove->prev;
+		assert(this_queue->tail->next == to_remove);
+		this_queue->tail->next = NULL;
+		this_queue->blocks_in_queue--;
+		free_packet_element(to_remove);
+	}
+	
+}
 
 static void read_pipe(struct tracers *this)
 {
-#if 0
-	result = read(this->fd, buffer, sizeof buffer);
-	printf("read %d: %d bytes\n", this->fd, result);
-	assert(result > 0);
-	if(this->save_fd >= 0) {
-		int bytes;
-
-		bytes = write(this->save_fd, buffer, result);
-		assert(bytes == result);
-	}
-#endif
 	struct block_info *block;
 	
 	block = read_pcap_block(this->fd);
 	print_block(block);
 	if(this->save_fd >= 0) 
 		save_block(this->save_fd, block);
-	free_block(block);	
+	if(enhanced_packet_block == block->type) {
+		queue_packet(this,  block);
+	} else {
+		free_block(block);	
+	}
 	
 }
 

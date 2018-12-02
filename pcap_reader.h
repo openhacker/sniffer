@@ -1,6 +1,7 @@
 #ifndef _PCAP_READER_H
 #define _PCAP_READER_H
 
+#include <stdint.h>
 
 enum block_type {
 	interface_description = 1,
@@ -30,6 +31,11 @@ struct block_info {
 	int body_length;
 	/* block_length - 12 == body_length */
 	void *block_body;
+	unsigned char *packet; /*  within block body */
+	uint64_t packet_time;
+	uint32_t captured_packet_length;
+	uint32_t original_packet_length;
+	uint32_t interface_id;
 };
 
 
@@ -37,6 +43,7 @@ struct block_info *read_pcap_block(int fd);
 void print_block(struct block_info *this);
 void free_block(struct block_info *this);
 void save_block(int fd, struct block_info *this);
+void print_enhanced_packet_block(struct block_info *pblock);
 
 #endif
 

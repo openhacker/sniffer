@@ -198,7 +198,7 @@ static void print_packet(unsigned char *p, int length)
 	while(length > 0) {
 		int i;
 
-		for(i = 0; i < 8 && length > 0; i++, length--, p++) {
+		for(i = 0; i < 16 && length > 0; i++, length--, p++) {
 			printf("%02x ", *p);
 		}
 		printf("\n");
@@ -206,31 +206,12 @@ static void print_packet(unsigned char *p, int length)
 		
 }
 
-static void print_enhanced_packet_block(void *body, int length)
+void print_enhanced_packet_block(struct block_info *pblock)
 {
-	uint32_t interface_id;
-	uint32_t timestamp_high;
-	uint32_t timestamp_low;
-	uint32_t captured_packet_length;
-	uint32_t original_packet_length;
-	void *packet;
-	
-	interface_id = *(uint32_t *) body;
-	body  += 4;
-	timestamp_high = *(uint32_t *) body;
-	body += 4;
-	timestamp_low = *(uint32_t *) body;
-	body += 4;
-	captured_packet_length = *(uint32_t *) body;
-	body += 4;
-	original_packet_length = *(uint32_t *) body;
-	body += 4;
-	packet = body;
 
-
-	printf("interface_id = %d, timestamp = 0x%08x%08x, captured packet length = %d, original packet length = %d\n",
-		interface_id, timestamp_high, timestamp_low, captured_packet_length, original_packet_length);
-	print_packet(packet, captured_packet_length);
+	printf("interface_id = %d, timestamp = 0x%16lx, captured packet length = %d, original packet length = %d\n",
+		pblock->interface_id, pblock->packet_time, pblock->captured_packet_length, pblock->original_packet_length);
+	print_packet(pblock->packet, pblock->captured_packet_length);
 	
 		
 }
@@ -247,7 +228,6 @@ void print_block(struct block_info *block)
 			print_interface_description_block(block->block_body, block->body_length);
 			break;
 		case enhanced_packet_block:
-			print_enhanced_packet_block(block->block_body, block->body_length);
 			break;
 		default:
 			break;
@@ -260,6 +240,51 @@ void free_block(struct block_info *block)
 {
 	free(block->block_body);
 	free(block);
+}
+
+static void decode_enhanced_packet_block(struct block_info *this)
+{
+	uint32_t timestamp_high;
+	uint32_t timestamp_low;
+	void *body = this->block_body;
+	
+	this->interface_id = *(uint32_t *) body;
+	body  += 4;
+	timestamp_high = *(uint32_t *) body;
+	body += 4;
+	timestamp_low = *(uint32_t *) body;
+	body += 4;
+	this->captured_packet_length = *(uint32_t *) body;
+	body += 4;
+	this->original_packet_length = *(uint32_t *) body;
+	body += 4;
+	this->packet_time = ((uint64_t ) timestamp_high) << 32 | timestamp_low;
+	this->packet = body;
+}
+
+
+static int safe_read(int fd, unsigned char *p, int length)
+{
+	int bytes_read = 0;
+	while(length > 0) {
+		int result;
+
+		if(bytes_read > 0) {
+			fprintf(stderr, "read %d bytes, wanted %d more\n", bytes_read, length);
+		}
+
+		result = read(fd, p, length);
+		if(result <= 0)  {
+			fprintf(stderr, "read failed in %s: temp read = %d\n", __func__, bytes_read);
+			return result;
+		}
+		length -= result;
+		bytes_read += result;
+		p += result;
+	}
+		
+	return bytes_read;
+		
 }
 
 struct block_info *read_pcap_block(int fd)
@@ -279,12 +304,15 @@ struct block_info *read_pcap_block(int fd)
 	block = get_new_block(block_type, block_length);
 	assert(block);
 
-	result = read(fd, block->block_body, block->body_length);
+	result = safe_read(fd, block->block_body, block->body_length);
 	assert(result == block->body_length);
 
 	result = read(fd, &second_length, sizeof second_length);
 	assert(sizeof second_length == result);
 	assert(second_length == block_length);
+	if(enhanced_packet_block == block_type) {
+		decode_enhanced_packet_block(block);
+	}
 	return block;
 }
 
@@ -301,7 +329,6 @@ void save_block(int fd, struct block_info *this)
 
 	result = write(fd, &this->block_length, sizeof this->block_length);
 	assert(result == sizeof this->block_length);
-
 }
 
 
