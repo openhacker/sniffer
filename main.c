@@ -136,7 +136,11 @@ static void new_tracer(int fd, const char *pipe, const char *interface, pid_t pi
 	if(true == save_pcaps) {
 		char pcap_save_file[128];
 	
+#if 0
 		sprintf(pcap_save_file, "%s/save-%d", temp_dir, save_num++);
+#else
+		sprintf(pcap_save_file, "save-%d-%d", getpid(), save_num++);
+#endif
 		new->save_fd = open(pcap_save_file, O_WRONLY | O_CREAT, 0666);
 		if(new->save_fd < 0) {
 			fprintf(stderr, "Cannot open %s: %s\n",  pcap_save_file, strerror(errno));
@@ -182,7 +186,9 @@ static int do_tracer(const char *interface)
 	int result;
 	int fd;
 
-	sprintf(named_pipe, "%s/%d", temp_dir,  num);
+	fprintf(stderr, "capturing on %s\n", interface);
+
+	sprintf(named_pipe, "%s/%d", temp_dir,  num++);
 	result = mknod(named_pipe, S_IFIFO | 0666, 0);
 	if(result < 0) {
 		fprintf(stderr, "cannot create named pipe %s: %s\n",
@@ -311,6 +317,7 @@ static void create_temp_dir(void)
 static void usage(void) 
 {
 	printf("-s -- save pcaps\n");
+	printf("-t -- specify tap\n");
 	exit(1);
 	
 }
@@ -319,27 +326,32 @@ static void usage(void)
 	
 main(int argc, char *argv[])
 {
+	int num_interfaces = 0;
+
+	create_temp_dir();
+	signal(SIGCHLD, catch_child);
 
 	while(1) {
 		int c;
 
-		c = getopt(argc, argv, "s");
+		c = getopt(argc, argv, "si:");
 		if(-1 == c)
 			break;
 		switch(c) {
 			case 's':
 				save_pcaps = true;
 				break;
+			case 'i':
+				do_tracer(optarg);
+				num_interfaces++;
+				break;	
 			default:
 				usage();
 		}
 	}
 
-	signal(SIGCHLD, catch_child);
-	create_temp_dir();
-	do_tracer("lo");
+	printf("intalled %d interfaces\n", num_interfaces);
 
-	pause_children = false;
 	while(tracer_list) {
 		if(true == sig_child_caught) {
 			printf("caught sig child\n");
