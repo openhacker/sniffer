@@ -42,6 +42,7 @@ struct tracers {
 	char *pipe;
 	int fd;		/* read fd for pipe */
 	int save_fd;	/* if -1, don't save, otherwise save all reads to this file for later analysis */
+	bool upstream;
 	pid_t pid;
 	char *interface;
 	struct packet_queue packet_queue;
@@ -50,6 +51,9 @@ struct tracers {
 };
 
 static struct tracers *tracer_list;
+
+static struct tracers *upstream;
+static struct tracers *downstream;
 
 static int catch_child(int signo)
 {
@@ -121,7 +125,7 @@ static void reap_children(void)
 }
 
 
-static void new_tracer(int fd, const char *pipe, const char *interface, pid_t pid)
+static struct tracers *new_tracer(int fd, const char *pipe, const char *interface, pid_t pid, bool upstream)
 {
 	static int save_num = 0;
 	struct tracers *new;
@@ -132,6 +136,7 @@ static void new_tracer(int fd, const char *pipe, const char *interface, pid_t pi
 	new->pid = pid;
 	new->fd = fd;
 	new->next = tracer_list;
+	new->upstream = upstream;
 	tracer_list = new;
 	if(true == save_pcaps) {
 		char pcap_save_file[128];
@@ -139,7 +144,8 @@ static void new_tracer(int fd, const char *pipe, const char *interface, pid_t pi
 #if 0
 		sprintf(pcap_save_file, "%s/save-%d", temp_dir, save_num++);
 #else
-		sprintf(pcap_save_file, "save-%d-%d", getpid(), save_num++);
+		sprintf(pcap_save_file, "%s-%d-%d", (true == upstream) ? "upstream" : "downstream",
+							 getpid(), save_num++);
 #endif
 		new->save_fd = open(pcap_save_file, O_WRONLY | O_CREAT, 0666);
 		if(new->save_fd < 0) {
@@ -150,8 +156,23 @@ static void new_tracer(int fd, const char *pipe, const char *interface, pid_t pi
 	} else {
 		new->save_fd = -1;
 	}
+	return new;
 		
 }
+
+#if 0
+static char **add_argv(char **old_argv, int size, char *new_arg)
+{
+}
+
+static void exec_parser(const char *command)
+{
+	char **argv = NULL;
+	char *progname = NULL;
+
+	
+}
+#endif
 
 
 static int run_tracer(const char *named_pipe,  const char *interface)
@@ -173,12 +194,12 @@ static int run_tracer(const char *named_pipe,  const char *interface)
        // see https://stackoverflow.com/questions/284325/how-to-make-child-process-die-after-parent-exits/17589555#17589555
 	
 	execlp("tshark", "tshark", "-i",  interface,  "-w", 
-			named_pipe, NULL);
+			named_pipe, "-f", "port ssh", NULL);
 	printf("should never get here\n");
 	exit(1);
 }
 
-static int do_tracer(const char *interface)
+static struct tracers *do_tracer(bool upstream, const char *interface)
 {
 	static int num = 0;
 	char named_pipe[128];
@@ -186,7 +207,7 @@ static int do_tracer(const char *interface)
 	int result;
 	int fd;
 
-	fprintf(stderr, "capturing on %s\n", interface);
+	fprintf(stderr, "capturing %s %s\n", upstream == true ? "upstream" : "downstream", interface);
 
 	sprintf(named_pipe, "%s/%d", temp_dir,  num++);
 	result = mknod(named_pipe, S_IFIFO | 0666, 0);
@@ -206,8 +227,7 @@ static int do_tracer(const char *interface)
 
 	pid = run_tracer(named_pipe, interface);
 	
-	new_tracer(fd, named_pipe, interface, pid);
-	return fd;
+	return new_tracer(fd, named_pipe, interface, pid, upstream);
 	
 }
 
@@ -317,7 +337,8 @@ static void create_temp_dir(void)
 static void usage(void) 
 {
 	printf("-s -- save pcaps\n");
-	printf("-t -- specify tap\n");
+	printf("-u -- specify upstream tap\n");
+	printf("-d -- specify downstream tap\n");
 	exit(1);
 	
 }
@@ -326,33 +347,37 @@ static void usage(void)
 	
 main(int argc, char *argv[])
 {
-	int num_interfaces = 0;
-
 	create_temp_dir();
 	signal(SIGCHLD, catch_child);
 
 	while(1) {
 		int c;
 
-		c = getopt(argc, argv, "si:");
+		c = getopt(argc, argv, "sd:u:");
 		if(-1 == c)
 			break;
 		switch(c) {
 			case 's':
 				save_pcaps = true;
 				break;
-			case 'i':
-				do_tracer(optarg);
-				num_interfaces++;
+			case 'u':
+				upstream = do_tracer(true, optarg);
 				break;	
+			case 'd':
+				downstream = do_tracer(false, optarg);
+				break;
 			default:
 				usage();
 		}
 	}
 
-	printf("intalled %d interfaces\n", num_interfaces);
 
-	while(tracer_list) {
+	if(!upstream || !downstream) {
+		fprintf(stderr, "Haven't select upstream or downstream\n");
+		exit(1);
+	}
+
+	while(upstream && downstream) {
 		if(true == sig_child_caught) {
 			printf("caught sig child\n");
 			reap_children();
