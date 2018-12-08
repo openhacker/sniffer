@@ -50,6 +50,7 @@ struct tracers {
 	struct tracers *prev;
 };
 
+static enum type_of_tracers { tracer_file, tracer_tshark, tracer_unknown } type_of_tracers = tracer_unknown;
 static struct tracers *tracer_list;
 
 static struct tracers *upstream;
@@ -141,12 +142,10 @@ static struct tracers *new_tracer(int fd, const char *pipe, const char *interfac
 	if(true == save_pcaps) {
 		char pcap_save_file[128];
 	
-#if 0
-		sprintf(pcap_save_file, "%s/save-%d", temp_dir, save_num++);
-#else
+
+		assert(type_of_tracers == tracer_tshark);
 		sprintf(pcap_save_file, "%s-%d-%d", (true == upstream) ? "upstream" : "downstream",
 							 getpid(), save_num++);
-#endif
 		new->save_fd = open(pcap_save_file, O_WRONLY | O_CREAT, 0666);
 		if(new->save_fd < 0) {
 			fprintf(stderr, "Cannot open %s: %s\n",  pcap_save_file, strerror(errno));
@@ -203,29 +202,43 @@ static struct tracers *do_tracer(bool upstream, const char *interface)
 {
 	static int num = 0;
 	char named_pipe[128];
-	pid_t pid;
+	pid_t pid = 0;
 	int result;
 	int fd;
+	char *type_of_stream;
 
-	fprintf(stderr, "capturing %s %s\n", upstream == true ? "upstream" : "downstream", interface);
-
-	sprintf(named_pipe, "%s/%d", temp_dir,  num++);
-	result = mknod(named_pipe, S_IFIFO | 0666, 0);
-	if(result < 0) {
-		fprintf(stderr, "cannot create named pipe %s: %s\n",
-			named_pipe, strerror(errno));
-		exit(1);
+	if(true == upstream) {
+		type_of_stream = "upstream";
+	} else {
+		type_of_stream = "downstream";
 	}
 
-	/* open read fd read write -- even though never write with this fd -- so there's no blocking */	
-	fd = open(named_pipe, O_RDWR);
-	if(fd < 0) {
-		fprintf(stderr, "Cannot open named pipe %s: %s\n", 
-			named_pipe, strerror(errno));
-		exit(1);
-	}
+	fd = open(interface, O_RDONLY);
+	if(fd >= 0) {
+		/* have a file */
+		assert(tracer_tshark == type_of_tracers);   /* cannot select tshark also */
+		type_of_tracers = tracer_file;
+		fprintf(stderr, "reading %s file from %s\n", type_of_stream, interface);
+	} else {
+		assert(tracer_file == type_of_tracers);
+		type_of_tracers = tracer_tshark;
+		fprintf(stderr, "capturing %s %s\n", upstream == true ? "upstream" : "downstream", interface);
 
-	pid = run_tracer(named_pipe, interface);
+		sprintf(named_pipe, "%s/%d", temp_dir,  num++);
+		result = mknod(named_pipe, S_IFIFO | 0666, 0);
+		if(result < 0) {
+			fprintf(stderr, "cannot create named pipe %s: %s\n",
+				named_pipe, strerror(errno));
+		}		exit(1);
+		/* open read fd read write -- even though never write with this fd -- so there's no blocking */	
+		fd = open(named_pipe, O_RDWR);
+		if(fd < 0) {
+			fprintf(stderr, "Cannot open named pipe %s: %s\n", 
+				named_pipe, strerror(errno));
+			exit(1);
+		}
+		pid = run_tracer(named_pipe, interface);
+	}
 	
 	return new_tracer(fd, named_pipe, interface, pid, upstream);
 	
