@@ -27,43 +27,7 @@ static struct block_info *get_new_block(enum block_type block_type, uint32_t len
 	return block;
 }
 
-#if 0
-static struct block_info *get_block(int fd, enum block_type block_type, uint32_t length)
-{
-	struct block_info *block;
 
-	block = get_new_block(block_type, length);
-	return block;
-	
-}
-#endif
-
-#if 0
-static struct block_info *read_pcap_block(FILE *f)
-{
-	
-	enum block_type block_type;
-	struct block_info *block;
-	uint32_t block_length;
-	uint32_t second_length;
-	int result;
-
-	result = fread((uint32_t *) &block_type, sizeof block_type, 1, f);
-	assert(1 == result);
-	result = fread(&block_length, sizeof block_length, 1, f);
-	assert(1 == result);
-
-	block = get_block(f, block_type, block_length - 12);
-	assert(block);
-	result = fread(block->block_body, 1, block->body_length, f);
-	assert(result == block->body_length);
-
-	result = fread(&second_length, sizeof second_length, 1, f);
-	assert(1 == result);
-	assert(second_length == block_length);
-	return block;
-}
-#endif
 	
 
 static char *ascii_block_type(enum block_type block_type)
@@ -296,6 +260,8 @@ struct block_info *read_pcap_block(int fd)
 	int result;
 
 	result = read(fd, (uint32_t *) &block_type, sizeof block_type);
+	if(0 == result)
+		return NULL;	// EOF??
 	assert(sizeof block_type == result);
 	result = read(fd, &block_length, sizeof block_length);
 	assert(result == sizeof block_length);

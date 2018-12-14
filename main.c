@@ -28,6 +28,7 @@ static int max_queue_elements = 100;
 struct packet_element {
 	struct timeval enqueue_time;
 	struct block_info *block;
+	bool ingress;	/* true for coming in, false for going out */
 	struct packet_element *next;
 	struct packet_element *prev;
 };
@@ -45,6 +46,7 @@ struct tracers {
 	bool upstream;
 	pid_t pid;
 	char *interface;
+	unsigned char mac_addr[6];
 	struct packet_queue packet_queue;
 	struct tracers *next;
 	struct tracers *prev;
@@ -55,6 +57,9 @@ static struct tracers *tracer_list;
 
 static struct tracers *upstream;
 static struct tracers *downstream;
+
+
+static struct block_info *read_pcap_packet(struct tracers *this);
 
 static int catch_child(int signo)
 {
@@ -142,8 +147,8 @@ static struct tracers *new_tracer(int fd, const char *pipe, const char *interfac
 	if(true == save_pcaps) {
 		char pcap_save_file[128];
 	
-
 		assert(type_of_tracers == tracer_tshark);
+
 		sprintf(pcap_save_file, "%s-%d-%d", (true == upstream) ? "upstream" : "downstream",
 							 getpid(), save_num++);
 		new->save_fd = open(pcap_save_file, O_WRONLY | O_CREAT, 0666);
@@ -154,6 +159,10 @@ static struct tracers *new_tracer(int fd, const char *pipe, const char *interfac
 		fprintf(stderr, "save file = %s\n", pcap_save_file);
 	} else {
 		new->save_fd = -1;
+	}
+	if(tracer_file == type_of_tracers) {
+		while(read_pcap_packet(new))
+			;
 	}
 	return new;
 		
@@ -198,7 +207,22 @@ static int run_tracer(const char *named_pipe,  const char *interface)
 	exit(1);
 }
 
-static struct tracers *do_tracer(bool upstream, const char *interface)
+static char *stringize_mac_addr(unsigned char mac_addr[6])
+{
+	static unsigned char ascii[6 * 3 + 1];
+	int i;
+	char *p = &ascii;
+
+	for(i = 0; i <= 5; i++) {
+		sprintf(p, "%02x:", mac_addr[i]);
+		p += 3;
+	}
+	p--;
+	*p = '\0';
+	return &ascii;
+}
+	
+static struct tracers *do_tracer(bool upstream, const char *interface, unsigned char mac_addr[6])
 {
 	static int num = 0;
 	char named_pipe[128];
@@ -206,6 +230,7 @@ static struct tracers *do_tracer(bool upstream, const char *interface)
 	int result;
 	int fd;
 	char *type_of_stream;
+	char *p;
 
 	if(true == upstream) {
 		type_of_stream = "upstream";
@@ -213,23 +238,27 @@ static struct tracers *do_tracer(bool upstream, const char *interface)
 		type_of_stream = "downstream";
 	}
 
+	
+
 	fd = open(interface, O_RDONLY);
 	if(fd >= 0) {
 		/* have a file */
-		assert(tracer_tshark == type_of_tracers);   /* cannot select tshark also */
+		assert(tracer_tshark != type_of_tracers);   /* cannot select tshark also */
 		type_of_tracers = tracer_file;
-		fprintf(stderr, "reading %s file from %s\n", type_of_stream, interface);
+		fprintf(stderr, "reading %s file from %s: %s\n", type_of_stream, interface, stringize_mac_addr(mac_addr));
 	} else {
-		assert(tracer_file == type_of_tracers);
+		assert(tracer_file != type_of_tracers);
 		type_of_tracers = tracer_tshark;
-		fprintf(stderr, "capturing %s %s\n", upstream == true ? "upstream" : "downstream", interface);
+		fprintf(stderr, "capturing %s %s:%s\n", upstream == true ? "upstream" : "downstream", interface, stringize_mac_addr(mac_addr));
 
 		sprintf(named_pipe, "%s/%d", temp_dir,  num++);
 		result = mknod(named_pipe, S_IFIFO | 0666, 0);
 		if(result < 0) {
 			fprintf(stderr, "cannot create named pipe %s: %s\n",
 				named_pipe, strerror(errno));
-		}		exit(1);
+			exit(1);
+		}
+
 		/* open read fd read write -- even though never write with this fd -- so there's no blocking */	
 		fd = open(named_pipe, O_RDWR);
 		if(fd < 0) {
@@ -285,11 +314,14 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	
 }
 
-static void read_pipe(struct tracers *this)
+static struct block_info *read_pcap_packet(struct tracers *this)
 {
 	struct block_info *block;
 	
 	block = read_pcap_block(this->fd);
+	if(!block)
+		return NULL;
+
 	print_block(block);
 	if(this->save_fd >= 0) 
 		save_block(this->save_fd, block);
@@ -298,6 +330,7 @@ static void read_pipe(struct tracers *this)
 	} else {
 		free_block(block);	
 	}
+	return block;
 	
 }
 
@@ -328,7 +361,7 @@ static void select_on_input(void)
 	}
 	for(this = tracer_list; this  && result > 0; this = this->next) {
 		if(FD_ISSET(this->fd, &set)) {
-			read_pipe(this);
+			read_pcap_packet(this);
 			result--;
 		}
 	}
@@ -350,34 +383,92 @@ static void create_temp_dir(void)
 static void usage(void) 
 {
 	printf("-s -- save pcaps\n");
-	printf("-u -- specify upstream tap\n");
-	printf("-d -- specify downstream tap\n");
+	printf("-l -- specify lan (downstream) tap\n");
+	printf("-w -- specify wan (upstream) tap\n");
+	printf("\ttaps are expressed \"interface_name:<mac addr>\"\n");
 	exit(1);
 	
 }
 
 
 	
+static void compare_streams(void)
+{
+}
+
+static bool decode_interface(char *arg, char **interface, char mac_addr[6])
+{
+	char *p;
+	int i;
+	int result;
+	
+	p = strchr(arg, ':');
+	if(!p)
+		return false;
+
+	*interface = strndup(arg, p - arg);
+	p++;
+	for(i = 0;  i < 5; i++) {
+
+		result = sscanf(p, "%02hhX", &mac_addr[i]);
+		if(result != 1) {
+			fprintf(stderr, "cannot decode remained %s\n", p);
+			return false;
+		}
+		p = strchr(p, ':');
+		if(!p) {
+			fprintf(stderr, "cannot find a : at mac entry %d for %s\n", i, arg);
+			return false;
+		}
+		p++;
+		if(!*p) {
+			fprintf(stderr, "end of string at entry %d\n", i);
+			return false;
+		}
+	}
+	result = sscanf(p, "%02hhX", &mac_addr[i]);
+	if(1 != result) {
+		fprintf(stderr, "cannot find mac addr 5\n");
+		return false;
+	}
+	return true;
+	
+	
+}
+
 main(int argc, char *argv[])
 {
 	create_temp_dir();
 	signal(SIGCHLD, catch_child);
+	char *wan_interface;
+	unsigned char wan_mac[6];
+	char *lan_interface;
+	unsigned char lan_mac;
 
 	while(1) {
 		int c;
+		bool result;
 
-		c = getopt(argc, argv, "sd:u:");
+		c = getopt(argc, argv, "sw:l:");
 		if(-1 == c)
 			break;
 		switch(c) {
 			case 's':
 				save_pcaps = true;
 				break;
-			case 'u':
-				upstream = do_tracer(true, optarg);
+			case 'l':
+				result = decode_interface(optarg, &lan_interface, &lan_mac);
+				if(false == result) {
+					fprintf(stderr, "Need valid lan addresses: got %s\n", optarg);
+					exit(1);
+				}
 				break;	
-			case 'd':
-				downstream = do_tracer(false, optarg);
+			case 'w':
+				result = decode_interface(optarg, &wan_interface, &wan_mac);
+				if(false == result) {
+					fprintf(stderr, "Need valid wan addresses: got %s\n", optarg);
+					exit(1);
+				}
 				break;
 			default:
 				usage();
@@ -385,17 +476,24 @@ main(int argc, char *argv[])
 	}
 
 
+	upstream =  do_tracer(true, wan_interface, &wan_mac);
+	downstream = do_tracer(false, lan_interface, &lan_mac);
+
 	if(!upstream || !downstream) {
 		fprintf(stderr, "Haven't select upstream or downstream\n");
 		exit(1);
 	}
 
-	while(upstream && downstream) {
-		if(true == sig_child_caught) {
-			printf("caught sig child\n");
-			reap_children();
+	if(tracer_file == type_of_tracers) {
+		compare_streams();
+	} else {
+		while(upstream && downstream) {
+			if(true == sig_child_caught) {
+				printf("caught sig child\n");
+				reap_children();
+			}
+			select_on_input();
 		}
-		select_on_input();
 	}
 }
 
