@@ -28,7 +28,7 @@ static int max_queue_elements = 100;
 struct packet_element {
 	struct timeval enqueue_time;
 	struct block_info *block;
-	bool ingress;	/* true for coming in, false for going out */
+	bool egress;	/* true for coming in, false for going out */
 	struct packet_element *next;
 	struct packet_element *prev;
 };
@@ -61,10 +61,9 @@ static struct tracers *downstream;
 
 static struct block_info *read_pcap_packet(struct tracers *this);
 
-static int catch_child(int signo)
+static void catch_child(int signo)
 {
 	sig_child_caught = true;	
-	return 0;
 }
 
 static void print_tracer_packets(struct tracers *this)
@@ -131,7 +130,8 @@ static void reap_children(void)
 }
 
 
-static struct tracers *new_tracer(int fd, const char *pipe, const char *interface, pid_t pid, bool upstream)
+static struct tracers *new_tracer(int fd, const char *pipe, const char *interface, pid_t pid, 
+			bool upstream, unsigned char mac_addr[6])
 {
 	static int save_num = 0;
 	struct tracers *new;
@@ -164,6 +164,7 @@ static struct tracers *new_tracer(int fd, const char *pipe, const char *interfac
 		while(read_pcap_packet(new))
 			;
 	}
+	memcpy(new->mac_addr, mac_addr, 6);
 	return new;
 		
 }
@@ -183,10 +184,45 @@ static void exec_parser(const char *command)
 #endif
 
 
+static void close_and_repopen(int target_fd, const char *interface)
+{
+	int fd;
+	char filename[256];
+	char *stream_name;
+	int result;
+
+	switch(target_fd) {
+		case 1:
+			stream_name = "stdout";
+			break;
+		case 2:
+			stream_name = "stderr";
+			break;
+		default:
+			fprintf(stderr, "want target_stream %d, need 1 or 2\n", target_fd);
+			exit(1);
+	}
+
+
+	sprintf(filename, "%s-%s", interface, stream_name);
+	fd = open(filename, O_WRONLY | O_CREAT | O_APPEND, 0644);
+	if(fd < 0) {
+		fprintf(stderr, "cannot open %s: %s\n", filename, strerror(errno));
+		exit(1);
+	}
+	result = dup2(fd, target_fd);
+	if(result < 0) {
+		fprintf(stderr, "cannot dup2 for %s to %s: %s\n", filename, target_fd, strerror(errno) );
+		exit(1);
+	}
+	close(fd);
+}
+
+
 static int run_tracer(const char *named_pipe,  const char *interface)
 {
 	pid_t child;
-
+	
 	child = fork();
 	switch(child) {
 		case -1:
@@ -198,8 +234,11 @@ static int run_tracer(const char *named_pipe,  const char *interface)
 			return child;
 	}
 
-	prctl(PR_SET_PDEATHSIG, SIGTERM);       // linux only, didn't know about it
        // see https://stackoverflow.com/questions/284325/how-to-make-child-process-die-after-parent-exits/17589555#17589555
+	prctl(PR_SET_PDEATHSIG, SIGTERM);       // linux only, didn't know about it
+
+	close_and_repopen(1, interface);
+	close_and_repopen(2, interface);
 	
 	execlp("tshark", "tshark", "-i",  interface,  "-w", 
 			named_pipe, "-f", "port ssh", NULL);
@@ -207,7 +246,7 @@ static int run_tracer(const char *named_pipe,  const char *interface)
 	exit(1);
 }
 
-static char *stringize_mac_addr(unsigned char mac_addr[6])
+static unsigned char *stringize_mac_addr(unsigned char mac_addr[6])
 {
 	static unsigned char ascii[6 * 3 + 1];
 	int i;
@@ -219,7 +258,7 @@ static char *stringize_mac_addr(unsigned char mac_addr[6])
 	}
 	p--;
 	*p = '\0';
-	return &ascii;
+	return ascii;
 }
 	
 static struct tracers *do_tracer(bool upstream, const char *interface, unsigned char mac_addr[6])
@@ -230,7 +269,6 @@ static struct tracers *do_tracer(bool upstream, const char *interface, unsigned 
 	int result;
 	int fd;
 	char *type_of_stream;
-	char *p;
 
 	if(true == upstream) {
 		type_of_stream = "upstream";
@@ -269,7 +307,7 @@ static struct tracers *do_tracer(bool upstream, const char *interface, unsigned 
 		pid = run_tracer(named_pipe, interface);
 	}
 	
-	return new_tracer(fd, named_pipe, interface, pid, upstream);
+	return new_tracer(fd, named_pipe, interface, pid, upstream, mac_addr);
 	
 }
 
@@ -279,18 +317,46 @@ static void free_packet_element(struct packet_element *this)
 	free(this);
 }
 	
+static void show_mac_address(const char *string, unsigned char *p)
+{
+	fprintf(stderr, "%s: ", string);
+	fprintf(stderr, "%02x:%02x:%02x:%02x:%02x:%02x\n",
+			*p, *(p + 1), *(p + 2), *(p + 3), *(p + 4), *(p + 5));
+}
+	
+	
+/* return true for sending, false for receiving */
+static bool sending_packet(struct block_info *block, unsigned char mac_addr[6])
+{
+	
+	show_mac_address("packet source", block->packet + 6);
+	show_mac_address("target", mac_addr);
+
+	if(!memcmp(block->packet + 6, mac_addr, 6)) 
+		return true;
+	else return false;
+
+}
+
 
 static void queue_packet(struct tracers *tracer, struct block_info *block)
 {
 	struct packet_element *this_element;
 	struct packet_queue *this_queue;
+	bool egress;
 
 	this_element = calloc(sizeof *this_element, 1);
 	assert(this_element != NULL);
 	gettimeofday(&this_element->enqueue_time, NULL);
 	this_queue = &tracer->packet_queue;
 	this_element->block = block;
-	
+
+	egress = sending_packet(block, tracer->mac_addr);
+	this_element->egress = egress;
+
+	fprintf(stderr, "%s: packet %s\n",  true == tracer->upstream ? "upstream" : "downstream",
+			true == egress  ? "egress" : "ingress");
+
 	if(this_queue->head)
 		this_queue->head->prev = this_element;
 	this_element->next = this_queue->head;
@@ -396,7 +462,7 @@ static void compare_streams(void)
 {
 }
 
-static bool decode_interface(char *arg, char **interface, char mac_addr[6])
+static bool decode_interface(char *arg, char **interface, unsigned char mac_addr[6])
 {
 	char *p;
 	int i;
@@ -436,14 +502,15 @@ static bool decode_interface(char *arg, char **interface, char mac_addr[6])
 	
 }
 
-main(int argc, char *argv[])
+int main(int argc, char *argv[])
 {
 	create_temp_dir();
+
 	signal(SIGCHLD, catch_child);
 	char *wan_interface;
 	unsigned char wan_mac[6];
 	char *lan_interface;
-	unsigned char lan_mac;
+	unsigned char lan_mac[6];
 
 	while(1) {
 		int c;
@@ -495,5 +562,6 @@ main(int argc, char *argv[])
 			select_on_input();
 		}
 	}
+	return 0;
 }
 
