@@ -29,6 +29,7 @@ struct packet_element {
 	struct timeval enqueue_time;
 	struct block_info *block;
 	bool egress;	/* true for coming in, false for going out */
+	struct packet_element *peer;	/* matching packet on other interface */
 	struct packet_element *next;
 	struct packet_element *prev;
 };
@@ -222,6 +223,8 @@ static void close_and_repopen(int target_fd, const char *interface)
 static int run_tracer(const char *named_pipe,  const char *interface)
 {
 	pid_t child;
+//	const char *filter = "port ssh";
+	const char *filter = "icmp";
 	
 	child = fork();
 	switch(child) {
@@ -241,7 +244,7 @@ static int run_tracer(const char *named_pipe,  const char *interface)
 	close_and_repopen(2, interface);
 	
 	execlp("tshark", "tshark", "-i",  interface,  "-w", 
-			named_pipe, "-f", "port ssh", NULL);
+			named_pipe, "-f", filter, NULL);
 	printf("should never get here\n");
 	exit(1);
 }
