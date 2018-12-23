@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <arpa/inet.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <sys/wait.h>
@@ -13,17 +14,19 @@
 #include <sys/select.h>
 #include <sys/time.h>
 #include <sys/prctl.h>
+#include <time.h>
 #include "pcap_reader.h"
 
-static bool sig_child_caught = false;
 
-static bool pause_children = false;
+static bool sig_child_caught = false;
 
 static char temp_dir[128];
 
 static bool save_pcaps = false;
 
 static int max_queue_elements = 100;
+
+static struct timeval first_packet;
 
 struct packet_element {
 	struct timeval enqueue_time;
@@ -44,7 +47,7 @@ struct tracers {
 	char *pipe;
 	int fd;		/* read fd for pipe */
 	int save_fd;	/* if -1, don't save, otherwise save all reads to this file for later analysis */
-	bool upstream;
+	bool wan;	/* true for upstream side, false for local side  */ 
 	pid_t pid;
 	char *interface;
 	unsigned char mac_addr[6];
@@ -56,8 +59,8 @@ struct tracers {
 static enum type_of_tracers { tracer_file, tracer_tshark, tracer_unknown } type_of_tracers = tracer_unknown;
 static struct tracers *tracer_list;
 
-static struct tracers *upstream;
-static struct tracers *downstream;
+static struct tracers *lan;
+static struct tracers *wan;
 
 
 static struct block_info *read_pcap_packet(struct tracers *this);
@@ -132,7 +135,7 @@ static void reap_children(void)
 
 
 static struct tracers *new_tracer(int fd, const char *pipe, const char *interface, pid_t pid, 
-			bool upstream, unsigned char mac_addr[6])
+			bool wan, unsigned char mac_addr[6])
 {
 	static int save_num = 0;
 	struct tracers *new;
@@ -143,14 +146,14 @@ static struct tracers *new_tracer(int fd, const char *pipe, const char *interfac
 	new->pid = pid;
 	new->fd = fd;
 	new->next = tracer_list;
-	new->upstream = upstream;
+	new->wan = wan;
 	tracer_list = new;
 	if(true == save_pcaps) {
 		char pcap_save_file[128];
 	
 		assert(type_of_tracers == tracer_tshark);
 
-		sprintf(pcap_save_file, "%s-%d-%d", (true == upstream) ? "upstream" : "downstream",
+		sprintf(pcap_save_file, "%s-%d-%d", (true == wan) ? "wan" : "lan",
 							 getpid(), save_num++);
 		new->save_fd = open(pcap_save_file, O_WRONLY | O_CREAT, 0666);
 		if(new->save_fd < 0) {
@@ -213,7 +216,7 @@ static void close_and_repopen(int target_fd, const char *interface)
 	}
 	result = dup2(fd, target_fd);
 	if(result < 0) {
-		fprintf(stderr, "cannot dup2 for %s to %s: %s\n", filename, target_fd, strerror(errno) );
+		fprintf(stderr, "cannot dup2 for %s to %d: %s\n", filename, target_fd, strerror(errno) );
 		exit(1);
 	}
 	close(fd);
@@ -249,11 +252,11 @@ static int run_tracer(const char *named_pipe,  const char *interface)
 	exit(1);
 }
 
-static unsigned char *stringize_mac_addr(unsigned char mac_addr[6])
+static char *stringize_mac_addr(unsigned char mac_addr[6])
 {
-	static unsigned char ascii[6 * 3 + 1];
+	static char ascii[6 * 3 + 1];
 	int i;
-	char *p = &ascii;
+	char *p = ascii;
 
 	for(i = 0; i <= 5; i++) {
 		sprintf(p, "%02x:", mac_addr[i]);
@@ -333,33 +336,53 @@ static bool sending_packet(struct block_info *block, unsigned char mac_addr[6])
 {
 	
 	show_mac_address("packet source", block->packet + 6);
+	show_mac_address("packet dest", block->packet);
 	show_mac_address("target", mac_addr);
 
-	if(!memcmp(block->packet + 6, mac_addr, 6)) 
+	if(!memcmp(block->packet + 6, &mac_addr, 6)) 
 		return true;
 	else return false;
 
 }
 
 
+static double packet_delay(struct timeval *tv)
+{
+	struct timeval delta;
+	
+	timersub(tv, &first_packet, &delta);
+	return (double) (delta.tv_sec + delta.tv_usec / 1000000.0);
+
+}
+
 static void queue_packet(struct tracers *tracer, struct block_info *block)
 {
 	struct packet_element *this_element;
 	struct packet_queue *this_queue;
 	bool egress;
+	static int packet_num = 0;
 
 	this_element = calloc(sizeof *this_element, 1);
 	assert(this_element != NULL);
 	gettimeofday(&this_element->enqueue_time, NULL);
+	if(!first_packet.tv_sec) {
+		first_packet = this_element->enqueue_time;
+	}
 	this_queue = &tracer->packet_queue;
 	this_element->block = block;
 
 	egress = sending_packet(block, tracer->mac_addr);
 	this_element->egress = egress;
 
-	fprintf(stderr, "%s: packet %s\n",  true == tracer->upstream ? "upstream" : "downstream",
+	fprintf(stderr, "%d: %s: %f  packet %s, direction %s\n",  packet_num++, tracer->interface,
+			 packet_delay(&this_element->enqueue_time),
+			 true == tracer->wan ? "wan" : "lan",
 			true == egress  ? "egress" : "ingress");
-
+	fprintf(stderr, "ethertype = 0x%02x ", ntohs(*( unsigned short *) (block->packet + 12)));
+	// mac header is 14 bytes
+	fprintf(stderr, "source address = %s ",  inet_ntoa(*(struct in_addr *) (block->packet + 26)));
+	fprintf(stderr, "dest   address = %s ",  inet_ntoa(*(struct in_addr *) (block->packet + 30)));
+	fprintf(stderr, "\n\n");
 	if(this_queue->head)
 		this_queue->head->prev = this_element;
 	this_element->next = this_queue->head;
@@ -505,6 +528,7 @@ static bool decode_interface(char *arg, char **interface, unsigned char mac_addr
 	
 }
 
+
 int main(int argc, char *argv[])
 {
 	create_temp_dir();
@@ -527,14 +551,14 @@ int main(int argc, char *argv[])
 				save_pcaps = true;
 				break;
 			case 'l':
-				result = decode_interface(optarg, &lan_interface, &lan_mac);
+				result = decode_interface(optarg, &lan_interface, lan_mac);
 				if(false == result) {
 					fprintf(stderr, "Need valid lan addresses: got %s\n", optarg);
 					exit(1);
 				}
 				break;	
 			case 'w':
-				result = decode_interface(optarg, &wan_interface, &wan_mac);
+				result = decode_interface(optarg, &wan_interface, wan_mac);
 				if(false == result) {
 					fprintf(stderr, "Need valid wan addresses: got %s\n", optarg);
 					exit(1);
@@ -546,18 +570,19 @@ int main(int argc, char *argv[])
 	}
 
 
-	upstream =  do_tracer(true, wan_interface, &wan_mac);
-	downstream = do_tracer(false, lan_interface, &lan_mac);
+	wan =  do_tracer(true, wan_interface, wan_mac);
+	lan = do_tracer(false, lan_interface, lan_mac);
 
-	if(!upstream || !downstream) {
-		fprintf(stderr, "Haven't select upstream or downstream\n");
+	if(!lan || !wan) {
+		fprintf(stderr, "Haven't selected wan or lan\n");
 		exit(1);
 	}
 
+	
 	if(tracer_file == type_of_tracers) {
 		compare_streams();
 	} else {
-		while(upstream && downstream) {
+		while(wan && lan) {
 			if(true == sig_child_caught) {
 				printf("caught sig child\n");
 				reap_children();
