@@ -50,6 +50,7 @@ struct tracers {
 	bool wan;	/* true for upstream side, false for local side  */ 
 	pid_t pid;
 	char *interface;
+	struct interface_info *info;
 	unsigned char mac_addr[6];
 	struct packet_queue packet_queue;
 	struct tracers *next;
@@ -267,7 +268,7 @@ static char *stringize_mac_addr(unsigned char mac_addr[6])
 	return ascii;
 }
 	
-static struct tracers *do_tracer(bool upstream, const char *interface, unsigned char mac_addr[6])
+static struct tracers *do_tracer(bool wan, const char *interface, unsigned char mac_addr[6])
 {
 	static int num = 0;
 	char named_pipe[128];
@@ -276,10 +277,10 @@ static struct tracers *do_tracer(bool upstream, const char *interface, unsigned 
 	int fd;
 	char *type_of_stream;
 
-	if(true == upstream) {
-		type_of_stream = "upstream";
+	if(true == wan) {
+		type_of_stream = "wan";
 	} else {
-		type_of_stream = "downstream";
+		type_of_stream = "lan";
 	}
 
 	
@@ -293,7 +294,7 @@ static struct tracers *do_tracer(bool upstream, const char *interface, unsigned 
 	} else {
 		assert(tracer_file != type_of_tracers);
 		type_of_tracers = tracer_tshark;
-		fprintf(stderr, "capturing %s %s:%s\n", upstream == true ? "upstream" : "downstream", interface, stringize_mac_addr(mac_addr));
+		fprintf(stderr, "capturing %s %s:%s\n", type_of_stream, interface, stringize_mac_addr(mac_addr));
 
 		sprintf(named_pipe, "%s/%d", temp_dir,  num++);
 		result = mknod(named_pipe, S_IFIFO | 0666, 0);
@@ -313,7 +314,7 @@ static struct tracers *do_tracer(bool upstream, const char *interface, unsigned 
 		pid = run_tracer(named_pipe, interface);
 	}
 	
-	return new_tracer(fd, named_pipe, interface, pid, upstream, mac_addr);
+	return new_tracer(fd, named_pipe, interface, pid, wan, mac_addr);
 	
 }
 
@@ -361,6 +362,8 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	struct packet_queue *this_queue;
 	bool egress;
 	static int packet_num = 0;
+	uint64_t seconds;
+	uint64_t microseconds;
 
 	this_element = calloc(sizeof *this_element, 1);
 	assert(this_element != NULL);
@@ -378,6 +381,13 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 			 packet_delay(&this_element->enqueue_time),
 			 true == tracer->wan ? "wan" : "lan",
 			true == egress  ? "egress" : "ingress");
+
+	seconds = block->packet_time / (1000000 * 1000) ;
+	microseconds = block->packet_time % (1000000 * 1000 );
+	fprintf(stderr, "enqueue time: %d:%d, pcap time = %ld:%ld\n",
+			this_element->enqueue_time.tv_sec, this_element->enqueue_time.tv_usec,
+			seconds, microseconds);
+			
 	fprintf(stderr, "ethertype = 0x%02x ", ntohs(*( unsigned short *) (block->packet + 12)));
 	// mac header is 14 bytes
 	fprintf(stderr, "source address = %s ",  inet_ntoa(*(struct in_addr *) (block->packet + 26)));

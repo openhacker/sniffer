@@ -22,7 +22,8 @@ enum option_code {
 struct interface_info {
 	char *name;
 	char *description;
-	unsigned char ts_resol;
+	unsigned char ts_resolv;
+	uint32_t units_per_sec;		// from ts_resolv 
 };	
 
 struct block_info {
