@@ -50,7 +50,8 @@ struct tracers {
 	bool wan;	/* true for upstream side, false for local side  */ 
 	pid_t pid;
 	char *interface;
-	struct interface_info *info;
+	struct pcap_option_element *interface_list;
+	struct pcap_option_element *section_header_list;
 	unsigned char mac_addr[6];
 	struct packet_queue packet_queue;
 	struct tracers *next;
@@ -64,7 +65,7 @@ static struct tracers *lan;
 static struct tracers *wan;
 
 
-static struct block_info *read_pcap_packet(struct tracers *this);
+static bool read_pcap_packet(struct tracers *this);
 
 static void catch_child(int signo)
 {
@@ -340,7 +341,7 @@ static bool sending_packet(struct block_info *block, unsigned char mac_addr[6])
 	show_mac_address("packet dest", block->packet);
 	show_mac_address("target", mac_addr);
 
-	if(!memcmp(block->packet + 6, &mac_addr, 6)) 
+	if(!memcmp(block->packet + 6, mac_addr, 6)) 
 		return true;
 	else return false;
 
@@ -416,23 +417,34 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	
 }
 
-static struct block_info *read_pcap_packet(struct tracers *this)
+/* return true for packet read, false for not */
+static bool read_pcap_packet(struct tracers *this)
 {
 	struct block_info *block;
 	
 	block = read_pcap_block(this->fd);
 	if(!block)
-		return NULL;
+		return false;
 
 	print_block(block);
 	if(this->save_fd >= 0) 
 		save_block(this->save_fd, block);
-	if(enhanced_packet_block == block->type) {
-		queue_packet(this,  block);
-	} else {
-		free_block(block);	
-	}
-	return block;
+	switch(block->type) {
+		case enhanced_packet_block:
+			queue_packet(this, block);
+			return true;
+		case section_header_block:
+			this->section_header_list = decode_header_options(block);
+			break;
+		case interface_description:
+			this->interface_list = decode_interface_options(block);
+			break;
+		default:
+			fprintf(stderr, "unknown block type  = 0x%x\n", block->type);
+			break;
+	}	
+	free_block(block);
+	return true;
 	
 }
 

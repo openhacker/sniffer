@@ -13,19 +13,52 @@ enum block_type {
 	section_header_block = 0x0a0d0d0a
 };
 
-enum option_code {
-	opt_endofopt = 0,
+
+
+enum opt_name {
+	opt_enedofopt = 0,
 	opt_comment = 1,
+	shb_hardware = 2,
+	shb_of = 3,
+	shb_userappl = 4,
+	if_name = 2,
+	if_description = 3,
+	if_IPv4addr = 4,
+	if_IPv6addr = 5,
+	if_MACaddr = 6,
+	if_EUIaddr = 7,
+	if_speed = 8,
+	if_tsresol = 9,
+	if_tzone = 10,
+	if_filter = 11,
+	if_os = 12, 
+	if_fsclen = 13,
+	if_tsoffet = 14,
+	if_hardware = 15
+};
+
+enum opt_type {
+	char_pointer,
+	char_single,
+	val_32bit,
+	val_64bit,
+	mac_addr
+};
+
+struct pcap_option_element {
+	enum opt_name name;
+	enum opt_type type;
+	union {
+		char *value;
+		char c;
+		uint32_t value32;
+		uint64_t value64;
+		uint8_t mac_addr[6];
+	};
+	struct pcap_option_element *next;
 };
 	
-
-struct interface_info {
-	char *name;
-	char *description;
-	unsigned char ts_resolv;
-	uint32_t units_per_sec;		// from ts_resolv 
-};	
-
+	
 struct block_info {
 	enum block_type type;
 	int block_length;
@@ -45,6 +78,8 @@ void print_block(struct block_info *this);
 void free_block(struct block_info *this);
 void save_block(int fd, struct block_info *this);
 void print_enhanced_packet_block(struct block_info *pblock);
+struct pcap_option_element *decode_header_options(struct block_info *this);
+struct pcap_option_element *decode_interface_options(struct block_info *this);
 
 #endif
 

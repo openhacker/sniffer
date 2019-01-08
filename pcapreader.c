@@ -214,6 +214,46 @@ void print_block(struct block_info *block)
 	}
 }
 
+
+struct pcap_option_element *decode_interface_options(struct block_info *block) 
+{
+	struct pcap_option_element *list = NULL;
+
+	return list;
+}
+
+struct pcap_option_element *decode_header_options(struct block_info *block)
+{
+	void *body;
+	int length;
+	struct pcap_option_element *list = NULL;
+	uint16_t major;
+	uint16_t minor;
+
+	body = block->block_body;
+	length = block->body_length;
+	
+	if(*(uint32_t *) body !=  0x0a0d0d0a) {
+		fprintf(stderr, "expect section header ot have block_body == 0xa0d0d0a\n");
+		exit(1);
+	}
+	body += 4;
+	length -= 4;
+
+	major = *(uint16_t *) body;
+	body += 2;
+	length -= 2;
+
+	minor = *(uint16_t *) body;
+	body += 2;
+	length -= 2;
+	
+	fprintf(stderr, "major = %d, minor = %d\n", major, minor);
+
+	return list;
+}
+
+	
 	
 
 void free_block(struct block_info *block)
