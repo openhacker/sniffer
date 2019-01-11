@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
 #include <assert.h>
 #include <stdbool.h>
 #include "pcap_reader.h"
@@ -63,7 +64,6 @@ static int print_option(char *body, int length)
 	option_length = *(short *) (body + 2);
 	fprintf(stderr, "\noption type = %d, option length = %d\n", option_type, option_length);
 	
-
 	switch(option_type) {
 		case 2:
 			print_option_value("shb_hardware", body + 4, option_length);
@@ -87,6 +87,41 @@ static int print_option(char *body, int length)
 		
 	fprintf(stderr, "option length = %d\n", option_length);
 	return option_length ;
+}
+
+static struct pcap_option_element *read_option(char *body, int length, int *bytes_read)
+{
+	struct pcap_option_element *element;
+	short option_code;
+	short option_length;
+
+	element = calloc(sizeof *element, 1);
+	memset(&element, 0, sizeof element);
+	option_code = *(short *) body;
+	body += 2;
+	option_length = *(short *) body;
+	body  += 2;
+	
+	switch(option_code) {
+		case opt_endofopt:
+			free(element);
+			element = NULL;	
+			break;
+		case opt_comment:
+		case shb_hardware:
+		case shb_os:
+		case shb_userappl:
+			element->value = strndup(body, option_length);
+			element->type = char_pointer;
+			element->name = option_code;
+			break;
+		default:
+			fprintf(stderr, "Unknown option %d\n", option_code);
+			free(element);
+			element = NULL;
+			break;
+	}
+	return element;
 }
 
 static void print_section_header_block(void *body, int length)
@@ -229,12 +264,15 @@ struct pcap_option_element *decode_header_options(struct block_info *block)
 	struct pcap_option_element *list = NULL;
 	uint16_t major;
 	uint16_t minor;
+	uint32_t byte_order_magic;
+	int64_t section_length;
 
 	body = block->block_body;
 	length = block->body_length;
 	
-	if(*(uint32_t *) body !=  0x0a0d0d0a) {
-		fprintf(stderr, "expect section header ot have block_body == 0xa0d0d0a\n");
+	byte_order_magic = *(uint32_t *) body;
+	if(byte_order_magic !=  0x01a2b3c4d) {
+		fprintf(stderr, "expect section header to have byte order magic -- seen 0x%08x\n", byte_order_magic);
 		exit(1);
 	}
 	body += 4;
@@ -249,6 +287,22 @@ struct pcap_option_element *decode_header_options(struct block_info *block)
 	length -= 2;
 	
 	fprintf(stderr, "major = %d, minor = %d\n", major, minor);
+
+	section_length = *(int64_t *) body;
+	body += 8;
+	length  -= 8;
+	
+
+	while(1) {
+		struct pcap_option_element *this_option;
+		int bytes_read;
+
+		this_option = read_option(body, length,  &bytes_read);
+		if(!this_option)
+			break;
+		this_option->next = list;
+		list = this_option;
+	}
 
 	return list;
 }

@@ -16,10 +16,10 @@ enum block_type {
 
 
 enum opt_name {
-	opt_enedofopt = 0,
+	opt_endofopt = 0,
 	opt_comment = 1,
 	shb_hardware = 2,
-	shb_of = 3,
+	shb_os = 3,
 	shb_userappl = 4,
 	if_name = 2,
 	if_description = 3,
