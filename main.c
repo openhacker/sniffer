@@ -417,6 +417,46 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	
 }
 
+static char *ascii_option(enum opt_name name)
+{
+#define case_asciify(x)    case x:	return #x;
+	switch(name) {
+		case_asciify(opt_comment);
+		case_asciify(shb_hardware);
+		case_asciify(shb_os);
+		case_asciify(shb_userappl);
+		default: return "unknown";
+	}
+#undef case_asciify
+}
+
+
+static void print_header_options(const char *name, struct pcap_option_element *list)
+{
+	fprintf(stderr, "list for %s\n", name);
+
+	while(list) {
+		fprintf(stderr, "option %s ", ascii_option(list->name));
+		switch(list->type) {
+			case char_pointer:
+				fprintf(stderr, "char * %s\n", list->value);
+				break;
+			case char_single:
+				fprintf(stderr, "char 0x%02x\n", list->c);
+				break;
+			case val_32bit:
+				fprintf(stderr, "uint32 0x%x\n", list->value32);
+				break;
+			case val_64bit:
+				fprintf(stderr, "uint64 0x%lx\n", list->value64);
+			default:
+				fprintf(stderr, "unknown option type %d\n", list->type);
+				break;
+		}
+		list = list->next;
+	}
+}
+
 /* return true for packet read, false for not */
 static bool read_pcap_packet(struct tracers *this)
 {
@@ -435,6 +475,7 @@ static bool read_pcap_packet(struct tracers *this)
 			return true;
 		case section_header_block:
 			this->section_header_list = decode_header_options(block);
+			print_header_options("section header", this->section_header_list);
 			break;
 		case interface_description:
 			this->interface_list = decode_interface_options(block);
