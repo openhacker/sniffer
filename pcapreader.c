@@ -89,37 +89,68 @@ static int print_option(char *body, int length)
 	return option_length ;
 }
 
-static struct pcap_option_element *read_option(char *body, int length, int *bytes_read)
+static struct pcap_option_element *read_option(bool section_header, char *body, int length, int *bytes_read)
 {
 	struct pcap_option_element *element;
 	short option_code;
 	short option_length;
 
-	element = calloc(1, sizeof *element);
 	option_code = *(short *) body;
 	body += 2;
 	option_length = *(short *) body;
 	body  += 2;
+
+	if(opt_endofopt == option_code)
+		return NULL;
+
+	element = calloc(1, sizeof *element);
 	
-	switch(option_code) {
-		case opt_endofopt:
-			free(element);
-			element = NULL;	
-			break;
-		case opt_comment:
-		case shb_hardware:
-		case shb_os:
-		case shb_userappl:
-			element->value = strndup(body, option_length);
-			element->type = char_pointer;
-			element->name = option_code;
-			break;
-		default:
-			fprintf(stderr, "Unknown option %d\n", option_code);
-			free(element);
-			element = NULL;
-			break;
+	if(true == section_header) {
+
+		/* decode section header */
+		switch(option_code) {
+			case opt_comment:
+			case shb_hardware:
+			case shb_os:
+			case shb_userappl:
+				element->value = strndup(body, option_length);
+				element->type = char_pointer;
+				element->name = option_code;
+				break;
+			default:
+				fprintf(stderr, "Unknown option %d\n", option_code);
+				free(element);
+				element = NULL;
+				break;
+		}
+	} else {
+		/* decode interface description block */
+		switch(option_code) {
+			case opt_comment:
+			case if_name:	
+			case if_description:
+			case if_filter:
+			case if_os:
+			case if_hardware:
+				element->value = strndup(body, option_length);
+				element->type = char_pointer;
+				element->name = option_code;
+				break;
+			case if_tsresol:
+			case if_fsclen:
+				element->name = option_code;
+				element->type = char_single;
+				element->c = *(char *) body;
+				break;
+			default:
+				fprintf(stderr, "unknown %d\n", option_code);
+				element->name = option_code;
+				element->type = char_single;
+				element->c = 0;
+				break;	
+		}
 	}
+		 
 	option_length += 4;
 	if(option_length & 0x3)
 		option_length = (option_length & ~0x3) + 4;
@@ -301,7 +332,7 @@ struct pcap_option_element *decode_header_options(struct block_info *block)
 		struct pcap_option_element *this_option;
 		int bytes_read;
 
-		this_option = read_option(body, length,  &bytes_read);
+		this_option = read_option(true, body, length,  &bytes_read);
 		if(!this_option)
 			break;
 		this_option->next = list;

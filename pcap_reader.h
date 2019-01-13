@@ -15,6 +15,7 @@ enum block_type {
 
 
 
+/* the options for section header and interface need to be used differently, since they don't have unique option numbers */
 enum opt_name {
 	opt_endofopt = 0,
 	opt_comment = 1,
@@ -33,7 +34,7 @@ enum opt_name {
 	if_filter = 11,
 	if_os = 12, 
 	if_fsclen = 13,
-	if_tsoffet = 14,
+	if_tsoffset = 14,
 	if_hardware = 15
 };
 

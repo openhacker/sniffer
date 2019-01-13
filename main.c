@@ -417,9 +417,10 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	
 }
 
-static char *ascii_option(enum opt_name name)
-{
 #define case_asciify(x)    case x:	return #x;
+
+static char *ascii_options_section_header(enum opt_name name)
+{
 	switch(name) {
 		case_asciify(opt_comment);
 		case_asciify(shb_hardware);
@@ -427,16 +428,40 @@ static char *ascii_option(enum opt_name name)
 		case_asciify(shb_userappl);
 		default: return "unknown";
 	}
-#undef case_asciify
 }
 
+static char *ascii_options_interface_description(enum opt_name name)
+{
+	switch(name) {
+		case_asciify(opt_comment);
+		case_asciify(if_name);
+		case_asciify(if_description);
+		case_asciify(if_IPv4addr);
+		case_asciify(if_IPv6addr);
+		case_asciify(if_MACaddr);
+		case_asciify(if_EUIaddr);
+		case_asciify(if_speed);
+		case_asciify(if_tsresol);
+		case_asciify(if_tzone);
+		case_asciify(if_filter);
+		case_asciify(if_os);
+		case_asciify(if_fsclen);
+		case_asciify(if_tsoffset);
+		case_asciify(if_hardware);
+		default: return "unknown";
+	}
+}
+#undef case_asciify
 
-static void print_header_options(const char *name, struct pcap_option_element *list)
+
+
+static void print_header_options(char *(*func)(enum opt_name name),
+			const char *name, struct pcap_option_element *list)
 {
 	fprintf(stderr, "list for %s\n", name);
 
 	while(list) {
-		fprintf(stderr, "option %s ", ascii_option(list->name));
+		fprintf(stderr, "option %s ", func(list->name));
 		switch(list->type) {
 			case char_pointer:
 				fprintf(stderr, "char * %s\n", list->value);
@@ -475,10 +500,12 @@ static bool read_pcap_packet(struct tracers *this)
 			return true;
 		case section_header_block:
 			this->section_header_list = decode_header_options(block);
-			print_header_options("section header", this->section_header_list);
+			print_header_options(ascii_options_section_header, "section header", this->section_header_list);
 			break;
 		case interface_description:
 			this->interface_list = decode_interface_options(block);
+			print_header_options(ascii_options_section_header, "interface_description",
+						this->interface_list);
 			break;
 		default:
 			fprintf(stderr, "unknown block type  = 0x%x\n", block->type);
