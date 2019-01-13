@@ -196,6 +196,7 @@ static void close_and_repopen(int target_fd, const char *interface)
 	char filename[256];
 	char *stream_name;
 	int result;
+	FILE *file;
 
 	switch(target_fd) {
 		case 1:
@@ -222,6 +223,19 @@ static void close_and_repopen(int target_fd, const char *interface)
 		exit(1);
 	}
 	close(fd);
+	
+	file = fdopen(target_fd, "a");
+	if(file) {
+		time_t current;
+
+		current = time(NULL);
+		fprintf(file, "file = %p\n", file);
+		fprintf(file, "pid = %d, time = %s\n", getpid(), ctime(&current));
+		fclose(file);
+	} else {
+		fprintf(stderr, "fdopen failed: %s\n", strerror(errno));
+	}
+	
 }
 
 
