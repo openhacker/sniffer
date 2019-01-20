@@ -488,6 +488,16 @@ static void print_header_options(char *(*func)(enum opt_name name),
 				break;
 			case val_64bit:
 				fprintf(stderr, "uint64 0x%lx\n", list->value64);
+				break;
+			case byte_array:
+				fprintf(stderr, "byte array ");
+				{ int i;
+
+				  for(i = 0; i < list->byte_array_length; i++)
+					fprintf(stderr, "0x%02x ", list->byte_array[i]);
+				}
+				fprintf(stderr, "\n");
+				break;
 			default:
 				fprintf(stderr, "unknown option type %d\n", list->type);
 				break;
@@ -518,7 +528,7 @@ static bool read_pcap_packet(struct tracers *this)
 			break;
 		case interface_description:
 			this->interface_list = decode_interface_options(block);
-			print_header_options(ascii_options_section_header, "interface_description",
+			print_header_options(ascii_options_interface_description, "interface_description",
 						this->interface_list);
 			break;
 		default:

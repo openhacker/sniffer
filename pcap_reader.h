@@ -43,18 +43,21 @@ enum opt_type {
 	char_single,
 	val_32bit,
 	val_64bit,
-	mac_addr
+	mac_addr,
+	byte_array
 };
 
 struct pcap_option_element {
 	enum opt_name name;
 	enum opt_type type;
+	int byte_array_length;		/* only for byte array */
 	union {
 		char *value;
 		char c;
 		uint32_t value32;
 		uint64_t value64;
 		uint8_t mac_addr[6];
+		char *byte_array;
 	};
 	struct pcap_option_element *next;
 };

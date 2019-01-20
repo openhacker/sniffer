@@ -129,12 +129,31 @@ static struct pcap_option_element *read_option(bool section_header, char *body, 
 			case opt_comment:
 			case if_name:	
 			case if_description:
-			case if_filter:
 			case if_os:
 			case if_hardware:
 				element->value = strndup(body, option_length);
 				element->type = char_pointer;
 				element->name = option_code;
+				break;
+			case if_filter:
+				/* spec has too many TODO -- only handle optin_data[0] == 0 -- character data 
+				 * (not string)
+  				 */
+#if 0
+				element->name = option_code;
+				element->type = byte_array;
+				element->byte_array_length = option_length;
+				element->byte_array = malloc(option_length);
+				memcpy(element->byte_array, body, option_length);
+#else
+				element->name = option_code;
+				element->type = char_pointer;
+				element->value = strndup( body + 1, option_length - 1);
+				assert(*body == 0);
+#endif
+				
+				
+				
 				break;
 			case if_tsresol:
 			case if_fsclen:
@@ -288,6 +307,32 @@ void print_block(struct block_info *block)
 struct pcap_option_element *decode_interface_options(struct block_info *block) 
 {
 	struct pcap_option_element *list = NULL;
+	void *body;
+	int length;
+	short linktype;
+	uint32_t snaplen;
+
+	body = block->block_body;
+	length = block->body_length;
+	linktype = *(short *) body;
+	body += 4;
+	length -= 4;
+	snaplen = *(uint32_t *) body;
+	body += 4;
+	length -= 4;	
+	
+	while(1) {
+		struct pcap_option_element *this_option;
+		int bytes_read;
+
+		this_option = read_option(false, body, length, &bytes_read);
+		if(!this_option)
+			break;
+		this_option->next = list;
+		list = this_option;
+		body += bytes_read;
+		length -= bytes_read;
+	}
 
 	return list;
 }
