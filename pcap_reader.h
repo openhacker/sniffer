@@ -70,7 +70,8 @@ struct block_info {
 	/* block_length - 12 == body_length */
 	void *block_body;
 	unsigned char *packet; /*  within block body */
-	uint64_t packet_time;
+	uint64_t packet_time;	/* in pcap format */
+	struct timeval timeval;	/* in timeval format after divisor */
 	uint32_t captured_packet_length;
 	uint32_t original_packet_length;
 	uint32_t interface_id;

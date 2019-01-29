@@ -32,6 +32,7 @@ static struct timeval first_packet;
 
 struct packet_element {
 	struct timeval enqueue_time;
+	struct timeval packet_time;	/* from pcap with divisor */	
 	struct block_info *block;
 	bool egress;	/* true for coming in, false for going out */
 	struct packet_element *peer;	/* matching packet on other interface */
@@ -51,7 +52,7 @@ struct tracers {
 	int save_fd;	/* if -1, don't save, otherwise save all reads to this file for later analysis */
 	bool wan;	/* true for upstream side, false for local side  */ 
 	pid_t pid;
-	int clock_divisor;
+	int clock_divisor;  /* divisor according to if_tsresol (or absence) */
 	char *interface;
 	struct pcap_option_element *interface_list;
 	struct pcap_option_element *section_header_list;
@@ -183,19 +184,6 @@ static struct tracers *new_tracer(int fd, const char *pipe, const char *interfac
 		
 }
 
-#if 0
-static char **add_argv(char **old_argv, int size, char *new_arg)
-{
-}
-
-static void exec_parser(const char *command)
-{
-	char **argv = NULL;
-	char *progname = NULL;
-
-	
-}
-#endif
 
 
 static void close_and_repopen(int target_fd, const char *interface)
@@ -405,8 +393,8 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 			 true == tracer->wan ? "wan" : "lan",
 			true == egress  ? "egress" : "ingress");
 
-	seconds = block->packet_time / (1000000 * 1000) ;
-	microseconds = block->packet_time % (1000000 * 1000 );
+	seconds = block->packet_time / tracer->clock_divisor;
+	microseconds = block->packet_time % tracer->clock_divisor;;
 	fprintf(stderr, "enqueue time: %ld:%ld, pcap time = %ld:%ld\n",
 			this_element->enqueue_time.tv_sec, this_element->enqueue_time.tv_usec,
 			seconds, microseconds);
@@ -514,6 +502,35 @@ static void print_header_options(char *(*func)(enum opt_name name),
 	}
 }
 
+
+static int compute_clock_divisor(char byte)
+{
+	int value;
+	int i;
+
+	assert(!(byte & 0x80));
+	
+	for(value = 1, i = 0; i < byte; i++, value *= 10)
+		;
+
+	return value;
+}
+	
+		
+static void figure_out_clock_divisor(struct tracers *tracer)
+{
+	struct pcap_option_element *option;
+
+	for(option = tracer->interface_list; option; option = option->next) {
+		if(option->name == if_tsresol) {
+			assert(char_single == option->type);
+			tracer->clock_divisor = compute_clock_divisor(option->value64);
+			return;
+		}
+	}
+	tracer->clock_divisor = compute_clock_divisor(6);	/* default to microsecond */
+}
+
 /* return true for packet read, false for not */
 static bool read_pcap_packet(struct tracers *this)
 {
@@ -538,6 +555,7 @@ static bool read_pcap_packet(struct tracers *this)
 			this->interface_list = decode_interface_options(block);
 			print_header_options(ascii_options_interface_description, "interface_description",
 						this->interface_list);
+			figure_out_clock_divisor(this);
 			break;
 		default:
 			fprintf(stderr, "unknown block type  = 0x%x\n", block->type);
@@ -652,6 +670,7 @@ static bool decode_interface(char *arg, char **interface, unsigned char mac_addr
 
 static void find_first_time(void)
 {
+
 }
 
 
