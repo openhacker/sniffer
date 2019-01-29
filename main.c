@@ -20,6 +20,8 @@
 
 static bool sig_child_caught = false;
 
+static bool sig_intr_caught = false;
+
 static char temp_dir[128];
 
 static bool save_pcaps = false;
@@ -49,6 +51,7 @@ struct tracers {
 	int save_fd;	/* if -1, don't save, otherwise save all reads to this file for later analysis */
 	bool wan;	/* true for upstream side, false for local side  */ 
 	pid_t pid;
+	int clock_divisor;
 	char *interface;
 	struct pcap_option_element *interface_list;
 	struct pcap_option_element *section_header_list;
@@ -70,6 +73,11 @@ static bool read_pcap_packet(struct tracers *this);
 static void catch_child(int signo)
 {
 	sig_child_caught = true;	
+}
+
+static void catch_intr(int signo)
+{
+	sig_intr_caught = true;
 }
 
 static void print_tracer_packets(struct tracers *this)
@@ -399,7 +407,7 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 
 	seconds = block->packet_time / (1000000 * 1000) ;
 	microseconds = block->packet_time % (1000000 * 1000 );
-	fprintf(stderr, "enqueue time: %d:%d, pcap time = %ld:%ld\n",
+	fprintf(stderr, "enqueue time: %ld:%ld, pcap time = %ld:%ld\n",
 			this_element->enqueue_time.tv_sec, this_element->enqueue_time.tv_usec,
 			seconds, microseconds);
 			
@@ -642,6 +650,18 @@ static bool decode_interface(char *arg, char **interface, unsigned char mac_addr
 	
 }
 
+static void find_first_time(void)
+{
+}
+
+
+static void terminate(void)
+{
+	find_first_time();
+	exit(0);
+}
+
+
 
 int main(int argc, char *argv[])
 {
@@ -693,6 +713,8 @@ int main(int argc, char *argv[])
 	}
 
 	
+	signal(SIGINT, catch_intr);
+
 	if(tracer_file == type_of_tracers) {
 		compare_streams();
 	} else {
@@ -700,6 +722,9 @@ int main(int argc, char *argv[])
 			if(true == sig_child_caught) {
 				printf("caught sig child\n");
 				reap_children();
+			}
+			if(true == sig_intr_caught) {
+				terminate();
 			}
 			select_on_input();
 		}
