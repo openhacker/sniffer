@@ -22,6 +22,7 @@ static bool sig_child_caught = false;
 
 static bool sig_intr_caught = false;
 
+
 static char temp_dir[128];
 
 static bool save_pcaps = false;
@@ -32,7 +33,7 @@ static struct timeval first_packet;
 
 struct packet_element {
 	struct timeval enqueue_time;
-	struct timeval packet_time;	/* from pcap with divisor */	
+	struct timeval packet_time;	/* from pcap with divisor and conversions */	
 	struct block_info *block;
 	bool egress;	/* true for coming in, false for going out */
 	struct packet_element *peer;	/* matching packet on other interface */
@@ -41,8 +42,8 @@ struct packet_element {
 };
 	
 struct packet_queue {
-	struct packet_element *head;
-	struct packet_element *tail;
+	struct packet_element *head;  /* oldest packet */
+	struct packet_element *tail;	/* newest packet */
 	int blocks_in_queue;
 };
 
@@ -53,6 +54,7 @@ struct tracers {
 	bool wan;	/* true for upstream side, false for local side  */ 
 	pid_t pid;
 	int clock_divisor;  /* divisor according to if_tsresol (or absence) */
+	int fraction_divisor;   /* to convert to tv_usec  from fraction -- typically 1000? */
 	char *interface;
 	struct pcap_option_element *interface_list;
 	struct pcap_option_element *section_header_list;
@@ -360,11 +362,13 @@ static bool sending_packet(struct block_info *block, unsigned char mac_addr[6])
 
 static double packet_delay(struct timeval *tv)
 {
+	double tmp;
 	struct timeval delta;
 	
 	timersub(tv, &first_packet, &delta);
-	return (double) (delta.tv_sec + delta.tv_usec / 1000000.0);
-
+	tmp = (double) delta.tv_sec;
+	tmp += delta.tv_usec / 1000000.0;
+	return tmp;
 }
 
 static void queue_packet(struct tracers *tracer, struct block_info *block)
@@ -374,14 +378,16 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	bool egress;
 	static int packet_num = 0;
 	uint64_t seconds;
-	uint64_t microseconds;
+	uint64_t fraction;
 
 	this_element = calloc(sizeof *this_element, 1);
 	assert(this_element != NULL);
 	gettimeofday(&this_element->enqueue_time, NULL);
+#if 0
 	if(!first_packet.tv_sec) {
 		first_packet = this_element->enqueue_time;
 	}
+#endif
 	this_queue = &tracer->packet_queue;
 	this_element->block = block;
 
@@ -394,33 +400,42 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 			true == egress  ? "egress" : "ingress");
 
 	seconds = block->packet_time / tracer->clock_divisor;
-	microseconds = block->packet_time % tracer->clock_divisor;;
+	fraction = block->packet_time % tracer->clock_divisor;;
 	fprintf(stderr, "enqueue time: %ld:%ld, pcap time = %ld:%ld\n",
 			this_element->enqueue_time.tv_sec, this_element->enqueue_time.tv_usec,
-			seconds, microseconds);
+			seconds, fraction);
+	this_element->packet_time.tv_sec = seconds;
+	this_element->packet_time.tv_usec = fraction / tracer->fraction_divisor;
 			
 	fprintf(stderr, "ethertype = 0x%02x ", ntohs(*( unsigned short *) (block->packet + 12)));
 	// mac header is 14 bytes
 	fprintf(stderr, "source address = %s ",  inet_ntoa(*(struct in_addr *) (block->packet + 26)));
 	fprintf(stderr, "dest   address = %s ",  inet_ntoa(*(struct in_addr *) (block->packet + 30)));
 	fprintf(stderr, "\n\n");
-	if(this_queue->head)
-		this_queue->head->prev = this_element;
-	this_element->next = this_queue->head;
-	this_queue->head = this_element;
-	if(0 == this_queue->blocks_in_queue) {
+	if(!this_queue->head)
+		this_queue->head = this_element;
+	if(this_queue->tail)
+		this_queue->tail->next = this_element;
+	this_element->prev = this_queue->tail;
+	this_queue->tail = this_element;
+	if(!this_queue->blocks_in_queue) {
 		/* empty queue */
-		this_queue->tail = this_element;
+		if(!first_packet.tv_sec) {
+			first_packet = this_element->packet_time;
+		} else if(timercmp(&first_packet, &this_element->packet_time, >)) {
+			first_packet = this_element->packet_time;
+		} 
 	} 
 	this_queue->blocks_in_queue++;
 	if(this_queue->blocks_in_queue > max_queue_elements) {
 		/* get rid of tail of queue */
 		struct packet_element *to_remove;
 
-		to_remove = this_queue->tail;
-		this_queue->tail = to_remove->prev;
-		assert(this_queue->tail->next == to_remove);
-		this_queue->tail->next = NULL;
+		to_remove = this_queue->head;
+		assert(to_remove->prev == NULL);
+		this_queue->head = to_remove->next;
+//		assert(this_queue->tail->next == to_remove);
+		this_queue->head->prev = NULL;
 		this_queue->blocks_in_queue--;
 		free_packet_element(to_remove);
 	}
@@ -520,15 +535,19 @@ static int compute_clock_divisor(char byte)
 static void figure_out_clock_divisor(struct tracers *tracer)
 {
 	struct pcap_option_element *option;
+	int divisor_value = 6;		/* default is microseconds */
 
 	for(option = tracer->interface_list; option; option = option->next) {
 		if(option->name == if_tsresol) {
 			assert(char_single == option->type);
-			tracer->clock_divisor = compute_clock_divisor(option->value64);
-			return;
+			divisor_value = option->value64;
+			break;
 		}
 	}
-	tracer->clock_divisor = compute_clock_divisor(6);	/* default to microsecond */
+	tracer->clock_divisor = compute_clock_divisor(divisor_value);	/* default to microsecond */
+	fprintf(stderr, "divisor value = %d, clock_divisor = %d\n", divisor_value, tracer->clock_divisor);
+	tracer->fraction_divisor = tracer->clock_divisor / compute_clock_divisor(6);
+	fprintf(stderr, "fraction divisor = %d\n", tracer->fraction_divisor);
 }
 
 /* return true for packet read, false for not */
@@ -668,15 +687,22 @@ static bool decode_interface(char *arg, char **interface, unsigned char mac_addr
 	
 }
 
-static void find_first_time(void)
-{
 
+static void display_packet_list(const char *type, struct tracers *tracer)
+{
+	struct packet_element *packet;
+	fprintf(stderr, "%s\n", type);
+
+	for(packet = tracer->packet_queue.head; packet; packet = packet->next) {
+		fprintf(stderr, "packet at %f\n", packet_delay(&packet->packet_time));
+	}
 }
 
 
 static void terminate(void)
 {
-	find_first_time();
+	display_packet_list("lan", lan);
+	display_packet_list("wan", wan);
 	exit(0);
 }
 
