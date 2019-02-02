@@ -32,6 +32,7 @@ static int max_queue_elements = 100;
 static struct timeval first_packet;
 
 struct packet_element {
+	int number;	/* each packet has a unique number */
 	struct timeval enqueue_time;
 	struct timeval packet_time;	/* from pcap with divisor and conversions */	
 	struct block_info *block;
@@ -94,6 +95,37 @@ static void print_tracer_packets(struct tracers *this)
 }
 
 
+/* already determined one is ingress and one is egress (when egress is later than ingress) */
+static bool compare_packets(struct packet_element *lan_element, struct packet_element *wan_element)
+{
+	unsigned char *lan_packet;
+	unsigned char *wan_packet;
+	
+	lan_packet = lan_element->block->packet;
+	wan_packet = wan_element->block->packet;
+
+	if(lan_element->egress == false && wan_element->egress == true) {
+		/* packet from lan to wan */
+		if(timercmp(&lan_element->packet_time, &wan_element->packet_time, >))
+			return false;
+	} else if(true == lan_element->egress  && false == wan_element->egress) {
+		/* packet from wan to lan */
+		if(timercmp(&lan_element->packet_time, &wan_element->packet_time, <))
+			return false;
+	} else return false;  /* can't be matched pair */
+
+	if(lan_packet[12] != wan_packet[12] || lan_packet[13] != wan_packet[13])
+		return false;	/* ethertype */
+
+	fprintf(stderr, "possible match: wan = %d, lan = %d\n", wan_element->number, lan_element->number);
+	
+	return true;
+	
+	
+}
+
+
+
 static void remove_tracer(pid_t pid)
 {
 	struct tracers *this;
@@ -141,6 +173,10 @@ static void reap_children(void)
 				fprintf(stderr, "waitpid had error: %s\n", strerror(errno));
 				return;
 			default:
+				if(false == sig_intr_caught) {
+					fprintf(stderr, "unplanned child died\n");
+					exit(1);
+				}
 				remove_tracer(pid);
 		}
 	}
@@ -166,7 +202,7 @@ static struct tracers *new_tracer(int fd, const char *pipe, const char *interfac
 	
 		assert(type_of_tracers == tracer_tshark);
 
-		sprintf(pcap_save_file, "%s-%d-%d", (true == wan) ? "wan" : "lan",
+		sprintf(pcap_save_file, "%s-%d-%d.pcapng", (true == wan) ? "wan" : "lan",
 							 getpid(), save_num++);
 		new->save_fd = open(pcap_save_file, O_WRONLY | O_CREAT, 0666);
 		if(new->save_fd < 0) {
@@ -394,7 +430,8 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	egress = sending_packet(block, tracer->mac_addr);
 	this_element->egress = egress;
 
-	fprintf(stderr, "%d: %s: %f  packet %s, direction %s\n",  packet_num++, tracer->interface,
+	this_element->number = packet_num++;
+	fprintf(stderr, "%d: %s: %f  packet %s, direction %s\n",  this_element->number, tracer->interface,
 			 packet_delay(&this_element->enqueue_time),
 			 true == tracer->wan ? "wan" : "lan",
 			true == egress  ? "egress" : "ingress");
@@ -694,7 +731,8 @@ static void display_packet_list(const char *type, struct tracers *tracer)
 	fprintf(stderr, "%s\n", type);
 
 	for(packet = tracer->packet_queue.head; packet; packet = packet->next) {
-		fprintf(stderr, "packet at %f\n", packet_delay(&packet->packet_time));
+		fprintf(stderr, "packet at %f, number = %d\n", packet_delay(&packet->packet_time), 
+				packet->number);
 	}
 }
 
