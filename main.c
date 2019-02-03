@@ -95,6 +95,17 @@ static void print_tracer_packets(struct tracers *this)
 }
 
 
+static void classify_packet(const char *type, struct packet_element *p)
+{
+	struct timeval offset;
+
+	timersub(&p->packet_time, &first_packet, &offset);
+
+	fprintf(stderr, "%s: packet #%d, %s, offset %ld:%06ld\n", type,
+				p->number, (true == p->egress) ? "egress" : "ingress",
+				offset.tv_sec, offset.tv_usec);
+}
+	
 /* already determined one is ingress and one is egress (when egress is later than ingress) */
 static bool compare_packets(struct packet_element *lan_element, struct packet_element *wan_element)
 {
@@ -103,6 +114,9 @@ static bool compare_packets(struct packet_element *lan_element, struct packet_el
 	
 	lan_packet = lan_element->block->packet;
 	wan_packet = wan_element->block->packet;
+
+	classify_packet("lan", lan_element);
+	classify_packet("wan", wan_element);
 
 	if(lan_element->egress == false && wan_element->egress == true) {
 		/* packet from lan to wan */
@@ -375,7 +389,7 @@ static void free_packet_element(struct packet_element *this)
 	
 static void show_mac_address(const char *string, unsigned char *p)
 {
-	fprintf(stderr, "%s: ", string);
+	fprintf(stderr, "%-20s: ", string);
 	fprintf(stderr, "%02x:%02x:%02x:%02x:%02x:%02x\n",
 			*p, *(p + 1), *(p + 2), *(p + 3), *(p + 4), *(p + 5));
 }
@@ -389,9 +403,13 @@ static bool sending_packet(struct block_info *block, unsigned char mac_addr[6])
 	show_mac_address("packet dest", block->packet);
 	show_mac_address("target", mac_addr);
 
-	if(!memcmp(block->packet + 6, mac_addr, 6)) 
+	if(!memcmp(block->packet + 6, mac_addr, 6))  {
+		fprintf(stderr, "egress\n");
 		return true;
-	else return false;
+	} else {
+		fprintf(stderr, "ingress\n");
+		return false;
+	}
 
 }
 
@@ -728,19 +746,47 @@ static bool decode_interface(char *arg, char **interface, unsigned char mac_addr
 static void display_packet_list(const char *type, struct tracers *tracer)
 {
 	struct packet_element *packet;
-	fprintf(stderr, "%s\n", type);
 
 	for(packet = tracer->packet_queue.head; packet; packet = packet->next) {
-		fprintf(stderr, "packet at %f, number = %d\n", packet_delay(&packet->packet_time), 
-				packet->number);
+		classify_packet(type, packet);
 	}
 }
 
+static void found_packet_match(struct packet_element *lan_element, struct packet_element *wan_element)
+{
+	fprintf(stderr, "found match\n");
+	lan_element->peer = wan_element;
+	wan_element->peer = lan_element;
+}
+
+
+static void match_packets(void)
+{
+	struct packet_element *lan_element;
+
+	for(lan_element = lan->packet_queue.head; lan_element; lan_element = lan_element->next) {
+		struct packet_element *wan_element;
+
+		if(lan_element->peer)
+			continue;
+		for(wan_element = wan->packet_queue.head; wan_element; wan_element = wan_element->next) {
+			if(wan_element->peer)
+				continue;
+			if(true == compare_packets(lan_element, wan_element)) {
+				found_packet_match(lan_element, wan_element);
+				break;
+			}
+		}	
+	}
+}
 
 static void terminate(void)
 {
 	display_packet_list("lan", lan);
 	display_packet_list("wan", wan);
+	match_packets();
+	show_mac_address("target lan", lan->mac_addr);
+	show_mac_address("target wan", wan->mac_addr);
 	exit(0);
 }
 
