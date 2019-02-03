@@ -319,11 +319,9 @@ static void close_and_repopen(int target_fd, const char *interface)
 }
 
 
-static int run_tracer(const char *named_pipe,  const char *interface)
+static int run_tracer(const char *named_pipe,  const char *interface, const char *filter)
 {
 	pid_t child;
-//	const char *filter = "port ssh";
-	const char *filter = "icmp";
 	
 	child = fork();
 	switch(child) {
@@ -342,8 +340,10 @@ static int run_tracer(const char *named_pipe,  const char *interface)
 	close_and_repopen(1, interface);
 	close_and_repopen(2, interface);
 	
-	execlp("tshark", "tshark", "-i",  interface,  "-w", 
+	if(filter)
+		execlp("tshark", "tshark", "-i",  interface,  "-w", 
 			named_pipe, "-f", filter, NULL);
+	else execlp("tshark", "tshark", "-i", interface, "-w", named_pipe, NULL);
 	printf("should never get here\n");
 	exit(1);
 }
@@ -363,7 +363,7 @@ static char *stringize_mac_addr(unsigned char mac_addr[6])
 	return ascii;
 }
 	
-static struct tracers *do_tracer(bool wan, const char *interface, unsigned char mac_addr[6])
+static struct tracers *do_tracer(bool wan, const char *interface, unsigned char mac_addr[6], const char *filter)
 {
 	static int num = 0;
 	char named_pipe[128];
@@ -406,7 +406,7 @@ static struct tracers *do_tracer(bool wan, const char *interface, unsigned char 
 				named_pipe, strerror(errno));
 			exit(1);
 		}
-		pid = run_tracer(named_pipe, interface);
+		pid = run_tracer(named_pipe, interface, filter);
 	}
 	
 	return new_tracer(fd, named_pipe, interface, pid, wan, mac_addr);
@@ -723,6 +723,7 @@ static void usage(void)
 	printf("-s -- save pcaps\n");
 	printf("-l -- specify lan (downstream) tap\n");
 	printf("-w -- specify wan (upstream) tap\n");
+	printf("-f -- tshark filter expression\n");
 	printf("\ttaps are expressed \"interface_name:<mac addr>\"\n");
 	exit(1);
 	
@@ -826,7 +827,9 @@ static void terminate(void)
 
 int main(int argc, char *argv[])
 {
+	char *filter = "icmp";
 	create_temp_dir();
+	
 
 	signal(SIGCHLD, catch_child);
 	char *wan_interface;
@@ -838,7 +841,7 @@ int main(int argc, char *argv[])
 		int c;
 		bool result;
 
-		c = getopt(argc, argv, "sw:l:");
+		c = getopt(argc, argv, "sf:w:l:");
 		if(-1 == c)
 			break;
 		switch(c) {
@@ -859,14 +862,18 @@ int main(int argc, char *argv[])
 					exit(1);
 				}
 				break;
+			case 'f':
+				filter = strdup(optarg);
+				fprintf(stderr, "filter expression = \"%s\"\n", filter);
+				break;
 			default:
 				usage();
 		}
 	}
 
 
-	wan =  do_tracer(true, wan_interface, wan_mac);
-	lan = do_tracer(false, lan_interface, lan_mac);
+	wan =  do_tracer(true, wan_interface, wan_mac, filter);
+	lan = do_tracer(false, lan_interface, lan_mac, filter);
 
 	if(!lan || !wan) {
 		fprintf(stderr, "Haven't selected wan or lan\n");
