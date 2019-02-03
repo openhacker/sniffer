@@ -129,6 +129,41 @@ static void print_ip_packet_info(const char *identifier, unsigned char *ip_heade
 			identifier, total_length, ttl, version, ihl, protocol, ascii_source, ascii_dest);
 }
 
+/* packets for lan and wan -- incoming flag:
+ *    coming in from wan (to lan) == true
+ *    going from lan to wan =  false
+ */
+static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wan_ip_header, bool incoming)
+{
+	char ip_header_size;
+	char protocol_type;
+
+	if(memcmp(lan_ip_header, wan_ip_header, 8))
+		return false;	
+	print_ip_packet_info("wan", wan_ip_header);
+	print_ip_packet_info("lan", lan_ip_header);	
+
+	ip_header_size = *wan_ip_header & 0xf;
+	protocol_type = *(wan_ip_header + 9);
+	if(true == incoming) {
+		/* ttl */
+		if(*(wan_ip_header + 8) != *(lan_ip_header + 8) + 1)
+			return false;
+		/* source address */
+		if(*((uint32_t *) (wan_ip_header + 12)) != *((uint32_t *) (lan_ip_header + 12)))
+			return false;
+	} else {
+		/* ttl */
+		if(*(lan_ip_header + 8) != *(wan_ip_header + 8) + 1)
+			return false;
+		/* destination address */
+		if(*((uint32_t *) (wan_ip_header + 16)) != *((uint32_t *) (lan_ip_header + 16)))
+			return false;
+	}
+	fprintf(stderr, "good src/dest address\n");
+	return false;	
+}
+
 /* already determined one is ingress and one is egress (when egress is later than ingress) */
 static bool compare_packets(struct packet_element *lan_element, struct packet_element *wan_element)
 {
@@ -136,6 +171,7 @@ static bool compare_packets(struct packet_element *lan_element, struct packet_el
 	unsigned char *wan_packet;
 	bool incoming;	/* true for coming in, false for going out */
 	uint16_t  ethertype;
+	bool packet_pair = false;	/* set when packet pair */
 	
 	lan_packet = lan_element->block->packet;
 	wan_packet = wan_element->block->packet;
@@ -160,12 +196,22 @@ static bool compare_packets(struct packet_element *lan_element, struct packet_el
 
 	
 	ethertype = ntohs(* (uint16_t *)  (lan_packet + 12));
-	print_ip_packet_info("lan", lan_packet + 14);
-	print_ip_packet_info("wan", wan_packet + 14);
+	switch(ethertype) {
+		case 0x800:
+			packet_pair = compare_ipv4_packets(lan_packet + 14, wan_packet + 14, incoming);
+			break;	
+		default:
+			fprintf(stderr, "unknown ethertype = 0x%04x\n", ethertype);
+			break;
+	}
+		
+	if(true == packet_pair) {
+		lan_element->peer = wan_element;
+		wan_element->peer = lan_element;
+	}
 	
-	fprintf(stderr, "ethertype = 0x%02x\n\n", ethertype);
 	
-	return true;
+	return packet_pair;
 	
 	
 }
