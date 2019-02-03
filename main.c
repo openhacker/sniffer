@@ -106,11 +106,36 @@ static void classify_packet(const char *type, struct packet_element *p)
 				offset.tv_sec, offset.tv_usec);
 }
 	
+static void print_ip_packet_info(const char *identifier, unsigned char *ip_header)
+{
+	uint16_t total_length;
+	char ascii_source[INET_ADDRSTRLEN];
+	char ascii_dest[INET_ADDRSTRLEN];
+	uint8_t protocol;	
+	uint8_t ttl;
+	uint8_t version;
+	uint8_t ihl;
+
+
+	version = *ip_header >> 4;
+	ihl = *ip_header & 0xf;
+	total_length = ntohs(*(uint16_t *) (ip_header + 2));
+	ttl = *(ip_header + 8);
+	protocol = *(ip_header + 9);
+	
+	inet_ntop(AF_INET, ip_header + 12,  ascii_source, sizeof ascii_source);
+	inet_ntop(AF_INET, ip_header + 16,  ascii_dest, sizeof ascii_dest);
+	fprintf(stderr, "%s packet: total_length = %d, ttl = %d, version = %d, ihl = %d, protocol = %d,   source = %s, dst = %s\n",
+			identifier, total_length, ttl, version, ihl, protocol, ascii_source, ascii_dest);
+}
+
 /* already determined one is ingress and one is egress (when egress is later than ingress) */
 static bool compare_packets(struct packet_element *lan_element, struct packet_element *wan_element)
 {
 	unsigned char *lan_packet;
 	unsigned char *wan_packet;
+	bool incoming;	/* true for coming in, false for going out */
+	uint16_t  ethertype;
 	
 	lan_packet = lan_element->block->packet;
 	wan_packet = wan_element->block->packet;
@@ -122,16 +147,23 @@ static bool compare_packets(struct packet_element *lan_element, struct packet_el
 		/* packet from lan to wan */
 		if(timercmp(&lan_element->packet_time, &wan_element->packet_time, >))
 			return false;
+		incoming = false;
 	} else if(true == lan_element->egress  && false == wan_element->egress) {
 		/* packet from wan to lan */
 		if(timercmp(&lan_element->packet_time, &wan_element->packet_time, <))
 			return false;
+		incoming = true;
 	} else return false;  /* can't be matched pair */
 
 	if(lan_packet[12] != wan_packet[12] || lan_packet[13] != wan_packet[13])
 		return false;	/* ethertype */
 
-	fprintf(stderr, "possible match: wan = %d, lan = %d\n", wan_element->number, lan_element->number);
+	
+	ethertype = ntohs(* (uint16_t *)  (lan_packet + 12));
+	print_ip_packet_info("lan", lan_packet + 14);
+	print_ip_packet_info("wan", wan_packet + 14);
+	
+	fprintf(stderr, "ethertype = 0x%02x\n\n", ethertype);
 	
 	return true;
 	
