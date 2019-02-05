@@ -157,16 +157,37 @@ static bool compare_icmp_packet(unsigned char *lan, unsigned char *wan, int leng
 	return false;
 }
 
-/* packets after IP header */
-static bool compare_tcp_packet(unsigned char *lan, unsigned char *wan, int length)
+/* packets after IP header  -- incoming is "from wan"*/
+static bool compare_tcp_packet(unsigned char *lan_tcp, unsigned char *wan_tcp, int length, bool incoming)
 {
+	int header_length;
+
+	if(true == incoming) {
+		if(*(uint16_t *) lan_tcp != *(uint16_t *) wan_tcp)  {
+			/* from wan -- source port is different */
+			return false;
+		}
+	} else if(*(uint16_t *) (lan_tcp + 2) != *(uint16_t *) (wan_tcp + 2)) {
+			return false;
+	}
+
+	if(memcmp(lan_tcp + 4, wan_tcp + 4, 12)) 
+		return false;	/* these 12 bytes have to match */
+
+	header_length = (*(lan_tcp + 12)  >> 4);
+	header_length *= 4;
+ 	fprintf(stderr, "header length = %d\n", header_length);
 	return false;
+	
+	
+	
 }
 
 /* packets after  IP header */
 static bool compare_udp_packet(unsigned char *lan, unsigned char *wan, int length)
 {
 	return false;
+	
 }
 
 
@@ -181,7 +202,7 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 	char protocol_type;
 	int remaining_length;
 	bool is_pair = false;
-	
+
 
 	if(memcmp(lan_ip_header, wan_ip_header, 8))
 		return false;	
@@ -216,7 +237,7 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 			break;
 		case 6:
 			is_pair = compare_tcp_packet(lan_ip_header + ip_header_size, 
-					wan_ip_header +  ip_header_size, remaining_length);	
+					wan_ip_header +  ip_header_size, remaining_length, incoming);	
 			break;
 		case 17:
 			is_pair = compare_udp_packet(lan_ip_header + ip_header_size, 
@@ -539,15 +560,17 @@ static void show_mac_address(const char *string, unsigned char *p)
 static bool sending_packet(struct block_info *block, unsigned char mac_addr[6])
 {
 	
+#if 0
 	show_mac_address("packet source", block->packet + 6);
 	show_mac_address("packet dest", block->packet);
 	show_mac_address("target", mac_addr);
+#endif
 
 	if(!memcmp(block->packet + 6, mac_addr, 6))  {
-		fprintf(stderr, "egress\n");
+//		fprintf(stderr, "egress\n");
 		return true;
 	} else {
-		fprintf(stderr, "ingress\n");
+//		fprintf(stderr, "ingress\n");
 		return false;
 	}
 
