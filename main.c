@@ -129,6 +129,47 @@ static void print_ip_packet_info(const char *identifier, unsigned char *ip_heade
 			identifier, total_length, ttl, version, ihl, protocol, ascii_source, ascii_dest);
 }
 
+/* packets after IP header */
+static bool compare_icmp_packet(unsigned char *lan, unsigned char *wan, int length)
+{
+	uint8_t type;
+	uint8_t code;
+		
+	/* check code and subtype */
+	if(*((uint16_t *) lan) != *((uint16_t *) wan))
+		return false;
+
+	type = *lan;
+	code = *(lan + 1);
+	switch(type) {
+		case 0:	/* ping request */
+		case 8: /* ping reply */
+			if(*(uint16_t *) (lan + 4) != *(uint16_t *) (wan + 4))
+				return false;
+			if(!memcmp(lan + 8, wan + 8, length - 8 ))
+				return true;
+			else	return false;
+		default:
+			fprintf(stderr, "unknown type: %d\n", type);
+			break;
+	}
+
+	return false;
+}
+
+/* packets after IP header */
+static bool compare_tcp_packet(unsigned char *lan, unsigned char *wan, int length)
+{
+	return false;
+}
+
+/* packets after  IP header */
+static bool compare_udp_packet(unsigned char *lan, unsigned char *wan, int length)
+{
+	return false;
+}
+
+
 /* packets for lan and wan -- incoming flag:
  *    coming in from wan (to lan) == true
  *    going from lan to wan =  false
@@ -136,7 +177,11 @@ static void print_ip_packet_info(const char *identifier, unsigned char *ip_heade
 static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wan_ip_header, bool incoming)
 {
 	char ip_header_size;
+	char  total_length;
 	char protocol_type;
+	int remaining_length;
+	bool is_pair = false;
+	
 
 	if(memcmp(lan_ip_header, wan_ip_header, 8))
 		return false;	
@@ -160,8 +205,28 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 		if(*((uint32_t *) (wan_ip_header + 16)) != *((uint32_t *) (lan_ip_header + 16)))
 			return false;
 	}
-	fprintf(stderr, "good src/dest address\n");
-	return false;	
+	assert(ip_header_size == 5);
+	ip_header_size *= 4;	/* convert to bytes from words */
+	total_length = ntohs(*(uint16_t *) (lan_ip_header + 2));
+	remaining_length = total_length - ip_header_size;
+	switch(protocol_type) {
+		case 1:
+			is_pair = compare_icmp_packet(lan_ip_header + ip_header_size, 
+					wan_ip_header +  ip_header_size, remaining_length);	
+			break;
+		case 6:
+			is_pair = compare_tcp_packet(lan_ip_header + ip_header_size, 
+					wan_ip_header +  ip_header_size, remaining_length);	
+			break;
+		case 17:
+			is_pair = compare_udp_packet(lan_ip_header + ip_header_size, 
+					wan_ip_header + ip_header_size, remaining_length);
+			break;
+		default:
+			fprintf(stderr, "unknown protocol type = %d\n", protocol_type);
+			break;
+	}
+	return is_pair;	
 }
 
 /* already determined one is ingress and one is egress (when egress is later than ingress) */
@@ -210,10 +275,7 @@ static bool compare_packets(struct packet_element *lan_element, struct packet_el
 		wan_element->peer = lan_element;
 	}
 	
-	
 	return packet_pair;
-	
-	
 }
 
 
@@ -849,12 +911,16 @@ static void match_packets(void)
 		if(lan_element->peer)
 			continue;
 		for(wan_element = wan->packet_queue.head; wan_element; wan_element = wan_element->next) {
+			bool result;
 			if(wan_element->peer)
 				continue;
-			if(true == compare_packets(lan_element, wan_element)) {
+			
+			result = compare_packets(lan_element, wan_element);
+			if(true == result) {
+				fprintf(stderr, "found match\n");
 				found_packet_match(lan_element, wan_element);
 				break;
-			}
+			} else fprintf(stderr, "no match\n");
 		}	
 	}
 }
@@ -864,8 +930,6 @@ static void terminate(void)
 	display_packet_list("lan", lan);
 	display_packet_list("wan", wan);
 	match_packets();
-	show_mac_address("target lan", lan->mac_addr);
-	show_mac_address("target wan", wan->mac_addr);
 	exit(0);
 }
 
