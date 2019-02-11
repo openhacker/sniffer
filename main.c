@@ -94,6 +94,14 @@ static void print_tracer_packets(struct tracers *this)
 	}
 }
 
+static const char *identify_tracer(struct tracers *this)
+{
+	if(true == this->wan)
+		return "wan";
+	else	return "lan";
+}
+
+
 
 static void classify_packet(const char *type, struct packet_element *p)
 {
@@ -177,9 +185,9 @@ static bool compare_tcp_packet(unsigned char *lan_tcp, unsigned char *wan_tcp, i
 	header_length = (*(lan_tcp + 12)  >> 4);
 	header_length *= 4;
  	fprintf(stderr, "header length = %d\n", header_length);
-	return false;
-	
-	
+	if(!memcmp(lan_tcp + header_length, wan_tcp + header_length, length - header_length)) {
+		return true;
+	} else return false;
 	
 }
 
@@ -940,11 +948,23 @@ static void match_packets(void)
 			
 			result = compare_packets(lan_element, wan_element);
 			if(true == result) {
-				fprintf(stderr, "found match\n");
 				found_packet_match(lan_element, wan_element);
 				break;
-			} else fprintf(stderr, "no match\n");
+			} /*  else fprintf(stderr, "no match  \n"); */
 		}	
+	}
+}
+
+static void find_unmatched_packets(struct tracers *this)
+{
+	struct packet_element *packet;
+
+	fprintf(stderr, "\n");
+	for(packet = this->packet_queue.head; packet; packet = packet->next) {
+		if(!packet->peer) {
+			fprintf(stderr, "No match %s packet %d\n",  identify_tracer(this),
+					packet->number);
+		}
 	}
 }
 
@@ -953,6 +973,8 @@ static void terminate(void)
 	display_packet_list("lan", lan);
 	display_packet_list("wan", wan);
 	match_packets();
+	find_unmatched_packets(wan);
+	find_unmatched_packets(lan);
 	exit(0);
 }
 
