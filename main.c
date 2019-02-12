@@ -26,9 +26,11 @@ static char temp_dir[128];
 
 static bool save_pcaps = false;
 
-static int max_queue_elements = 100;
+static int max_queue_elements = 1000;
 
 static struct timeval first_packet;
+
+static char *mismatch_reason;
 
 static int verbose = 0;
 
@@ -214,24 +216,33 @@ static bool compare_tcp_packet(unsigned char *lan_tcp, unsigned char *wan_tcp, i
 {
 	int header_length;
 
+	mismatch_reason = "tcp packet";
+
 	if(true == incoming) {
 		if(*(uint16_t *) lan_tcp != *(uint16_t *) wan_tcp)  {
 			/* from wan -- source port is different */
+			mismatch_reason = "source port";
 			return false;
 		}
 	} else if(*(uint16_t *) (lan_tcp + 2) != *(uint16_t *) (wan_tcp + 2)) {
+			mismatch_reason = "destination port";
 			return false;
 	}
 
-	if(memcmp(lan_tcp + 4, wan_tcp + 4, 12)) 
+	if(memcmp(lan_tcp + 4, wan_tcp + 4, 12))  {
+		mismatch_reason = "tcp bytes 4-16";
 		return false;	/* these 12 bytes have to match */
+	}
 
 	header_length = (*(lan_tcp + 12)  >> 4);
 	header_length *= 4;
- 	fprintf(stderr, "header length = %d\n", header_length);
+ 	fprintf(stderr, "length = %d, header length = %d\n", length, header_length);
 	if(!memcmp(lan_tcp + header_length, wan_tcp + header_length, length - header_length)) {
 		return true;
-	} else return false;
+	} else { 
+		mismatch_reason = "tcp data";
+		return false;
+	}
 	
 }
 
@@ -249,19 +260,26 @@ static bool compare_udp_packet(unsigned char *lan, unsigned char *wan, int lengt
  */
 static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wan_ip_header, bool incoming)
 {
-	char ip_header_size;
-	char  total_length;
+	int ip_header_size;
+	int total_length;
 	char protocol_type;
 	int remaining_length;
 	bool is_pair = false;
 
+	mismatch_reason = "unknown";
 
-	if(memcmp(lan_ip_header, wan_ip_header, 8))
+	if(memcmp(lan_ip_header, wan_ip_header, 8)) {
+		mismatch_reason = "first 8 bytes of IP header";
 		return false;	
+	}
 	print_ip_packet_info("wan", wan_ip_header);
 	print_ip_packet_info("lan", lan_ip_header);	
 
 	ip_header_size = *wan_ip_header & 0xf;
+	if(*(wan_ip_header + 9) != *(lan_ip_header + 9)) {
+		mismatch_reason = "IPv4 protocol";
+		return false;
+	}
 	protocol_type = *(wan_ip_header + 9);
 	if(true == incoming) {
 		/* ttl */
@@ -270,8 +288,10 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 			return false;
 #endif
 		/* source address */
-		if(*((uint32_t *) (wan_ip_header + 12)) != *((uint32_t *) (lan_ip_header + 12)))
+		if(*((uint32_t *) (wan_ip_header + 12)) != *((uint32_t *) (lan_ip_header + 12))) {
+			mismatch_reason = "source IPv4 address";
 			return false;
+		}
 	} else {
 		/* ttl */
 #if 0
@@ -279,13 +299,22 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 			return false;
 #endif
 		/* destination address */
-		if(*((uint32_t *) (wan_ip_header + 16)) != *((uint32_t *) (lan_ip_header + 16)))
+		if(*((uint32_t *) (wan_ip_header + 16)) != *((uint32_t *) (lan_ip_header + 16))) {
+			mismatch_reason = "destination IPv4 address";
 			return false;
+		}
 	}
 	assert(ip_header_size == 5);
 	ip_header_size *= 4;	/* convert to bytes from words */
 	total_length = ntohs(*(uint16_t *) (lan_ip_header + 2));
 	remaining_length = total_length - ip_header_size;
+#if 0
+	fprintf(stderr, "ip_header_size = %d, total length = %d, remaining length = %d\n",
+		ip_header_size, total_length, remaining_length);
+#endif
+	assert(total_length > 0);
+			
+	
 	switch(protocol_type) {
 		case 1:
 			is_pair = compare_icmp_packet(lan_ip_header + ip_header_size, 
@@ -996,7 +1025,10 @@ static void match_packets(void)
 			if(true == result) {
 				found_packet_match(lan_element, wan_element);
 				break;
-			}  else fprintf(stderr, "no match,  wan %d, lan %d\n", wan_element->number, lan_element->number); 
+			}  else { 
+				fprintf(stderr, "no match,  wan %d, lan %d: %s\n", 
+					wan_element->number, lan_element->number, mismatch_reason); 
+			}
 		}	
 	}
 }
