@@ -22,7 +22,6 @@ static bool sig_child_caught = false;
 
 static bool sig_intr_caught = false;
 
-
 static char temp_dir[128];
 
 static bool save_pcaps = false;
@@ -102,16 +101,58 @@ static const char *identify_tracer(struct tracers *this)
 }
 
 
+static void make_ascii_mac(unsigned char *address, char *string)
+{
+	int i;
+
+	for(i = 0; i < 6; i++) {
+		sprintf(string, "%02x:", *(address + i));
+		string += 3;
+	}
+	string--;
+	*string = 0;
+}
+		
+
+
+static void classify_ipv4(const char *ip_header)
+{
+	char src_addr[INET_ADDRSTRLEN];
+	char dst_addr[INET_ADDRSTRLEN];
+	unsigned short length;
+
+	length = ntohs(*(unsigned short *) (ip_header + 2));
+	inet_ntop(AF_INET, ip_header + 12, src_addr, sizeof src_addr);
+	inet_ntop(AF_INET, ip_header + 16, dst_addr, sizeof dst_addr);
+	fprintf(stderr, "length = %d, source: %s, dest = %s\n",
+			length, src_addr, dst_addr);
+}
 
 static void classify_packet(const char *type, struct packet_element *p)
 {
+	void *packet;
 	struct timeval offset;
+	char source_mac[2 * 6 + 6];
+	char dest_mac[2 * 6 + 6];
+	unsigned short ethertype;
 
 	timersub(&p->packet_time, &first_packet, &offset);
 
 	fprintf(stderr, "%s: packet #%d, %s, offset %ld:%06ld\n", type,
 				p->number, (true == p->egress) ? "egress" : "ingress",
 				offset.tv_sec, offset.tv_usec);
+	packet = p->block->packet;
+	make_ascii_mac(packet, dest_mac);
+	make_ascii_mac(packet + 6, source_mac);
+	ethertype = ntohs(*(unsigned short *) (packet + 12));
+	fprintf(stderr, "source = %s, dest = %s, ethertype = %04x\n", source_mac, dest_mac, ethertype);
+	switch(ethertype) {
+		case 0x800:
+			classify_ipv4(packet + 14);
+			break;
+	}
+		
+	
 }
 	
 static void print_ip_packet_info(const char *identifier, unsigned char *ip_header)
@@ -270,8 +311,10 @@ static bool compare_packets(struct packet_element *lan_element, struct packet_el
 	lan_packet = lan_element->block->packet;
 	wan_packet = wan_element->block->packet;
 
+#if 0
 	classify_packet("lan", lan_element);
 	classify_packet("wan", wan_element);
+#endif
 
 	if(lan_element->egress == false && wan_element->egress == true) {
 		/* packet from lan to wan */
@@ -959,11 +1002,10 @@ static void find_unmatched_packets(struct tracers *this)
 {
 	struct packet_element *packet;
 
-	fprintf(stderr, "\n");
+	fprintf(stderr, "\nunmatched packets\n");
 	for(packet = this->packet_queue.head; packet; packet = packet->next) {
 		if(!packet->peer) {
-			fprintf(stderr, "No match %s packet %d\n",  identify_tracer(this),
-					packet->number);
+			classify_packet(identify_tracer(this), packet);
 		}
 	}
 }
