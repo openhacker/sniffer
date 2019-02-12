@@ -30,8 +30,10 @@ static int max_queue_elements = 100;
 
 static struct timeval first_packet;
 
+static int verbose = 0;
+
 struct packet_element {
-	int number;	/* each packet has a unique number */
+	int number;	/* order of packet read on the interface */
 	struct timeval enqueue_time;
 	struct timeval packet_time;	/* from pcap with divisor and conversions */	
 	struct block_info *block;
@@ -59,6 +61,7 @@ struct tracers {
 	struct pcap_option_element *interface_list;
 	struct pcap_option_element *section_header_list;
 	unsigned char mac_addr[6];
+	int packets_read;
 	struct packet_queue packet_queue;
 	struct tracers *next;
 	struct tracers *prev;
@@ -262,8 +265,10 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 	protocol_type = *(wan_ip_header + 9);
 	if(true == incoming) {
 		/* ttl */
+#if 0
 		if(*(wan_ip_header + 8) != *(lan_ip_header + 8) + 1)
 			return false;
+#endif
 		/* source address */
 		if(*((uint32_t *) (wan_ip_header + 12)) != *((uint32_t *) (lan_ip_header + 12)))
 			return false;
@@ -644,7 +649,6 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	struct packet_element *this_element;
 	struct packet_queue *this_queue;
 	bool egress;
-	static int packet_num = 0;
 	uint64_t seconds;
 	uint64_t fraction;
 
@@ -662,7 +666,7 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	egress = sending_packet(block, tracer->mac_addr);
 	this_element->egress = egress;
 
-	this_element->number = packet_num++;
+	this_element->number = tracer->packets_read++;
 	fprintf(stderr, "%d: %s: %f  packet %s, direction %s\n",  this_element->number, tracer->interface,
 			 packet_delay(&this_element->enqueue_time),
 			 true == tracer->wan ? "wan" : "lan",
@@ -906,6 +910,7 @@ static void usage(void)
 	printf("-l -- specify lan (downstream) tap\n");
 	printf("-w -- specify wan (upstream) tap\n");
 	printf("-f -- tshark filter expression\n");
+	printf("-v -- verbose\n");
 	printf("\ttaps are expressed \"interface_name:<mac addr>\"\n");
 	exit(1);
 	
@@ -913,10 +918,6 @@ static void usage(void)
 
 
 	
-static void compare_streams(void)
-{
-}
-
 static bool decode_interface(char *arg, char **interface, unsigned char mac_addr[6])
 {
 	char *p;
@@ -1001,8 +1002,16 @@ static void match_packets(void)
 static void find_unmatched_packets(struct tracers *this)
 {
 	struct packet_element *packet;
+	int total_unmatched;
 
-	fprintf(stderr, "\nunmatched packets\n");
+	for(total_unmatched = 0, packet = this->packet_queue.head; packet; packet = packet->next) {
+		if(!packet->peer)
+			total_unmatched++;
+	}
+
+	fprintf(stderr, "\n%s: unmatched packets %d out of %d\n", 
+			identify_tracer(this), total_unmatched, this->packets_read);
+
 	for(packet = this->packet_queue.head; packet; packet = packet->next) {
 		if(!packet->peer) {
 			classify_packet(identify_tracer(this), packet);
@@ -1012,8 +1021,10 @@ static void find_unmatched_packets(struct tracers *this)
 
 static void terminate(void)
 {
-	display_packet_list("lan", lan);
-	display_packet_list("wan", wan);
+	if(verbose > 0) {
+		display_packet_list("lan", lan);
+		display_packet_list("wan", wan);
+	}
 	match_packets();
 	find_unmatched_packets(wan);
 	find_unmatched_packets(lan);
@@ -1038,7 +1049,7 @@ int main(int argc, char *argv[])
 		int c;
 		bool result;
 
-		c = getopt(argc, argv, "sf:w:l:");
+		c = getopt(argc, argv, "vsf:w:l:");
 		if(-1 == c)
 			break;
 		switch(c) {
@@ -1058,6 +1069,9 @@ int main(int argc, char *argv[])
 					fprintf(stderr, "Need valid wan addresses: got %s\n", optarg);
 					exit(1);
 				}
+				break;
+			case 'v':
+				verbose++;
 				break;
 			case 'f':
 				filter = strdup(optarg);
@@ -1080,19 +1094,15 @@ int main(int argc, char *argv[])
 	
 	signal(SIGINT, catch_intr);
 
-	if(tracer_file == type_of_tracers) {
-		compare_streams();
-	} else {
-		while(wan && lan) {
-			if(true == sig_child_caught) {
-				printf("caught sig child\n");
-				reap_children();
-			}
-			if(true == sig_intr_caught) {
-				terminate();
-			}
-			select_on_input();
+	while(wan && lan) {
+		if(true == sig_child_caught) {
+			printf("caught sig child\n");
+			reap_children();
 		}
+		if(true == sig_intr_caught) {
+			terminate();
+		}
+		select_on_input();
 	}
 	return 0;
 }
