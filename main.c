@@ -274,8 +274,10 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 			return false;
 	} else {
 		/* ttl */
+#if 0
 		if(*(lan_ip_header + 8) != *(wan_ip_header + 8) + 1)
 			return false;
+#endif
 		/* destination address */
 		if(*((uint32_t *) (wan_ip_header + 16)) != *((uint32_t *) (lan_ip_header + 16)))
 			return false;
@@ -994,7 +996,7 @@ static void match_packets(void)
 			if(true == result) {
 				found_packet_match(lan_element, wan_element);
 				break;
-			} /*  else fprintf(stderr, "no match  \n"); */
+			}  else fprintf(stderr, "no match,  wan %d, lan %d\n", wan_element->number, lan_element->number); 
 		}	
 	}
 }
