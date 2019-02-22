@@ -34,8 +34,8 @@ static char *mismatch_reason;
 
 static int verbose = 0;
 
-static int ttl_same = 0;
-static int ttl_off_by_one = 0;
+static int ttl_same_counter = 0;
+static int ttl_off_by_one_counter = 0;
 
 struct packet_element {
 	int number;	/* order of packet read on the interface */
@@ -269,6 +269,7 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 	bool is_pair = false;
 	unsigned char lan_ttl;
 	unsigned char wan_ttl;
+	bool ttl_same_state; 	/* true if ttl is the same, false if not -- only used for matches */
 
 	mismatch_reason = "unknown";
 
@@ -287,31 +288,32 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 	protocol_type = *(wan_ip_header + 9);
 	wan_ttl = *(wan_ip_header + 8);
 	lan_ttl = *(lan_ip_header + 8);
+	fprintf(stderr, "matching wan_ttl = %d, lan_ttl = %d\n",  wan_ttl, lan_ttl);
 	if(true == incoming) {
 		/* source address */
 		if(*((uint32_t *) (wan_ip_header + 12)) != *((uint32_t *) (lan_ip_header + 12))) {
 			mismatch_reason = "source IPv4 address";
 			return false;
 		}
-#if 0
-		if((wan_ttl != lan_ttl + 1) && (wan_ttl != lan_ttl)) {
-			mismatch_reason = "ttl headers";
-			return false;	
+
+		if(wan_ttl == lan_ttl + 1) {
+			ttl_same_state = false;
+		} else if(wan_ttl == lan_ttl) {
+			ttl_same_state = true;
+		} else {
+			mismatch_reason = "ttl counter";
+			return false;
 		}
-#endif
 	} else {
 		/* ttl */
-#if 0
-		if(*(lan_ip_header + 8) != *(wan_ip_header + 8) + 1)
-			return false;
-#else
-#if 0
-		if((wan_ttl+ 1 != lan_ttl) && (wan_ttl!= lan_ttl)) {
-			mismatch_reason = "ttl headers";
+		if(wan_ttl + 1 == lan_ttl) {
+			ttl_same_state = false;
+		} else if(lan_ttl == wan_ttl) {
+			ttl_same_state = true;
+		} else {
+			mismatch_reason = "ttl counter";
 			return false;	
 		}
-#endif
-#endif
 		/* destination address */
 		if(*((uint32_t *) (wan_ip_header + 16)) != *((uint32_t *) (lan_ip_header + 16))) {
 			mismatch_reason = "destination IPv4 address";
@@ -346,7 +348,9 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 			break;
 	}
 	if(true == is_pair) {
-		/* classify ttl */
+		if(true == ttl_same_state) {
+			ttl_same_counter++;
+		} else ttl_off_by_one_counter++;
 	}
 	return is_pair;	
 }
@@ -1111,6 +1115,8 @@ static void terminate(void)
 #endif
 	find_unmatched_packets(wan);
 	find_unmatched_packets(lan);
+	fprintf(stderr, "ttl same = %d, ttl off by one = %d\n",
+			ttl_same_counter, ttl_off_by_one_counter);
 	exit(0);
 }
 
