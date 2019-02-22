@@ -38,6 +38,8 @@ static int verbose = 0;
 static int ttl_same_counter = 0;
 static int ttl_off_by_one_counter = 0;
 
+static int packets_matched = 0;
+
 static int realtime_wireshark_fd = -1;
 
 /* first one is 0, second is 1 */
@@ -333,7 +335,8 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 			return false;
 		}
 	}
-	assert(ip_header_size == 5); ip_header_size *= 4;	/* convert to bytes from words */
+	assert(ip_header_size == 5); 
+	ip_header_size *= 4;	/* convert to bytes from words */
 	total_length = ntohs(*(uint16_t *) (lan_ip_header + 2));
 	remaining_length = total_length - ip_header_size;
 #if 0
@@ -387,18 +390,27 @@ static bool compare_packets(struct packet_element *lan_element, struct packet_el
 
 	if(lan_element->egress == false && wan_element->egress == true) {
 		/* packet from lan to wan */
-		if(timercmp(&lan_element->packet_time, &wan_element->packet_time, >))
+		if(timercmp(&lan_element->packet_time, &wan_element->packet_time, >)) {
+			mismatch_reason = "lan > wan time";
 			return false;
+		}
 		incoming = false;
 	} else if(true == lan_element->egress  && false == wan_element->egress) {
 		/* packet from wan to lan */
-		if(timercmp(&lan_element->packet_time, &wan_element->packet_time, <))
+		if(timercmp(&lan_element->packet_time, &wan_element->packet_time, <)) {
+			mismatch_reason = "wan < lan time";
 			return false;
+		}
 		incoming = true;
-	} else return false;  /* can't be matched pair */
+	} else {
+		mismatch_reason = "wrong ingress/egress";
+		return false;  /* can't be matched pair */
+	}
 
-	if(lan_packet[12] != wan_packet[12] || lan_packet[13] != wan_packet[13])
+	if(lan_packet[12] != wan_packet[12] || lan_packet[13] != wan_packet[13]) {
+		mismatch_reason = "ethertype";
 		return false;	/* ethertype */
+	}
 
 	
 	ethertype = ntohs(* (uint16_t *)  (lan_packet + 12));
@@ -410,11 +422,16 @@ static bool compare_packets(struct packet_element *lan_element, struct packet_el
 			fprintf(stderr, "unknown ethertype = 0x%04x\n", ethertype);
 			break;
 	}
-		
+	
 	if(true == packet_pair) {
 		fprintf(stderr, "found pair: wan %d, lan %d\n", wan_element->number, lan_element->number);
+		packets_matched++;
 		lan_element->peer = wan_element;
 		wan_element->peer = lan_element;
+	} else if(wan_element->number == lan_element->number) {
+		fprintf(stderr, "No match -- number is the same\n");		
+		classify_packet("lan", lan_element);
+		classify_packet("wan", wan_element);
 	}
 	
 	return packet_pair;
@@ -771,7 +788,7 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	egress = sending_packet(block, tracer->mac_addr);
 	this_element->egress = egress;
 
-	this_element->number = tracer->packets_read++;
+	this_element->number = ++tracer->packets_read;
 	if(verbose > 0) 
 		fprintf(stderr, "%d: %s: %f  packet %s, direction %s\n",  this_element->number, tracer->interface,
 			 packet_delay(&this_element->enqueue_time),
@@ -1160,6 +1177,16 @@ static void find_unmatched_packets(struct tracers *this)
 	}
 }
 
+static void statistics(void)
+{
+	fprintf(stderr, "ttl same = %d, ttl off by one = %d\n",
+			ttl_same_counter, ttl_off_by_one_counter);
+	fprintf(stderr, "wan packets seen = %d, lan packets seen = %d\n", 
+			wan->packets_read, lan->packets_read);
+	fprintf(stderr, "packets matched = %d\n", packets_matched);
+			
+}
+
 static void terminate(void)
 {
 	if(verbose > 0) {
@@ -1168,11 +1195,10 @@ static void terminate(void)
 	}
 #if 0
 	match_packets();
-#endif
 	find_unmatched_packets(wan);
 	find_unmatched_packets(lan);
-	fprintf(stderr, "ttl same = %d, ttl off by one = %d\n",
-			ttl_same_counter, ttl_off_by_one_counter);
+#endif
+	statistics();
 	exit(0);
 }
 
@@ -1218,6 +1244,7 @@ int main(int argc, char *argv[])
 	
 
 	signal(SIGCHLD, catch_child);
+	signal(SIGUSR1, statistics);
 	char *wan_interface;
 	unsigned char wan_mac[6];
 	char *lan_interface;
