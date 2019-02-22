@@ -188,10 +188,12 @@ static void print_ip_packet_info(const char *identifier, unsigned char *ip_heade
 	ttl = *(ip_header + 8);
 	protocol = *(ip_header + 9);
 	
-	inet_ntop(AF_INET, ip_header + 12,  ascii_source, sizeof ascii_source);
-	inet_ntop(AF_INET, ip_header + 16,  ascii_dest, sizeof ascii_dest);
-	fprintf(stderr, "%s packet: total_length = %d, ttl = %d, version = %d, ihl = %d, protocol = %d,   source = %s, dst = %s\n",
-			identifier, total_length, ttl, version, ihl, protocol, ascii_source, ascii_dest);
+	if(verbose) {
+		inet_ntop(AF_INET, ip_header + 12,  ascii_source, sizeof ascii_source);
+		inet_ntop(AF_INET, ip_header + 16,  ascii_dest, sizeof ascii_dest);
+		fprintf(stderr, "%s packet: total_length = %d, ttl = %d, version = %d, ihl = %d, protocol = %d,   source = %s, dst = %s\n",
+				identifier, total_length, ttl, version, ihl, protocol, ascii_source, ascii_dest);
+	}
 }
 
 /* packets after IP header */
@@ -247,7 +249,8 @@ static bool compare_tcp_packet(unsigned char *lan_tcp, unsigned char *wan_tcp, i
 
 	header_length = (*(lan_tcp + 12)  >> 4);
 	header_length *= 4;
- 	fprintf(stderr, "length = %d, header length = %d\n", length, header_length);
+	if(verbose > 0) 
+	 	fprintf(stderr, "length = %d, header length = %d\n", length, header_length);
 	if(!memcmp(lan_tcp + header_length, wan_tcp + header_length, length - header_length)) {
 		return true;
 	} else { 
@@ -297,7 +300,8 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 	protocol_type = *(wan_ip_header + 9);
 	wan_ttl = *(wan_ip_header + 8);
 	lan_ttl = *(lan_ip_header + 8);
-	fprintf(stderr, "matching wan_ttl = %d, lan_ttl = %d\n",  wan_ttl, lan_ttl);
+	if(verbose > 0) 
+		fprintf(stderr, "matching wan_ttl = %d, lan_ttl = %d\n",  wan_ttl, lan_ttl);
 	if(true == incoming) {
 		/* source address */
 		if(*((uint32_t *) (wan_ip_header + 12)) != *((uint32_t *) (lan_ip_header + 12))) {
@@ -408,6 +412,7 @@ static bool compare_packets(struct packet_element *lan_element, struct packet_el
 	}
 		
 	if(true == packet_pair) {
+		fprintf(stderr, "found pair: wan %d, lan %d\n", wan_element->number, lan_element->number);
 		lan_element->peer = wan_element;
 		wan_element->peer = lan_element;
 	}
@@ -710,25 +715,36 @@ static void try_to_find_peer(bool is_wan, struct packet_element *packet)
 		struct packet_element *lan_packet;
 
 		for(lan_packet = lan->packet_queue.head; lan_packet; lan_packet = lan_packet->next) {
+			bool result;
+
 			if(lan_packet->peer)
 				continue;
-			if(true == compare_packets(packet, lan_packet)) {
-				fprintf(stderr, "match wan packet %d with lan packet %d\n",
-					packet->number, lan_packet->number);
-				return;
+			result = compare_packets(lan_packet, packet);
+			if(verbose > 0) {
+				fprintf(stderr, "wan packet %d: %s  with lan packet %d\n",
+						packet->number, 
+						true == result ? "match" : "no match", 
+						lan_packet->number);
 			}
+			if(true == result)
+				return;
 		}
 	} else {
 		struct packet_element *wan_packet;
 		
 		for(wan_packet = wan->packet_queue.head; wan_packet; wan_packet = wan_packet->next) {
+			bool result; 
+
 			if(wan_packet->peer)
 				continue;
-			if(true == compare_packets(wan_packet, packet)) {
-				fprintf(stderr, "match lan packet %d with wan packet %d\n",
-					packet->number, wan_packet->number);
-				return;
+			result = compare_packets(packet, wan_packet);
+			if(verbose > 0) {
+				fprintf(stderr, "lan packet %d %s with wan packet %d\n",
+					packet->number, true == result ? "match" : "no match",
+					wan_packet->number);
 			}
+			if(true == result)
+				return;
 		}
 	}
 }
@@ -756,24 +772,29 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	this_element->egress = egress;
 
 	this_element->number = tracer->packets_read++;
-	fprintf(stderr, "%d: %s: %f  packet %s, direction %s\n",  this_element->number, tracer->interface,
+	if(verbose > 0) 
+		fprintf(stderr, "%d: %s: %f  packet %s, direction %s\n",  this_element->number, tracer->interface,
 			 packet_delay(&this_element->enqueue_time),
 			 true == tracer->wan ? "wan" : "lan",
 			true == egress  ? "egress" : "ingress");
 
 	seconds = block->packet_time / tracer->clock_divisor;
 	fraction = block->packet_time % tracer->clock_divisor;;
-	fprintf(stderr, "enqueue time: %ld:%ld, pcap time = %ld:%ld\n",
+	if(verbose > 0) 
+		fprintf(stderr, "enqueue time: %ld:%ld, pcap time = %ld:%ld\n",
 			this_element->enqueue_time.tv_sec, this_element->enqueue_time.tv_usec,
 			seconds, fraction);
 	this_element->packet_time.tv_sec = seconds;
 	this_element->packet_time.tv_usec = fraction / tracer->fraction_divisor;
 			
-	fprintf(stderr, "ethertype = 0x%02x ", ntohs(*( unsigned short *) (block->packet + 12)));
+	if(verbose > 0) {
+		fprintf(stderr, "ethertype = 0x%02x ", ntohs(*( unsigned short *) (block->packet + 12)));
 	// mac header is 14 bytes
-	fprintf(stderr, "source address = %s ",  inet_ntoa(*(struct in_addr *) (block->packet + 26)));
-	fprintf(stderr, "dest   address = %s ",  inet_ntoa(*(struct in_addr *) (block->packet + 30)));
-	fprintf(stderr, "\n\n");
+		fprintf(stderr, "source address = %s ",  inet_ntoa(*(struct in_addr *) (block->packet + 26)));
+		fprintf(stderr, "dest   address = %s ",  inet_ntoa(*(struct in_addr *) (block->packet + 30)));
+		fprintf(stderr, "\n\n");
+	}
+		
 	if(!this_queue->head)
 		this_queue->head = this_element;
 	if(this_queue->tail)
@@ -799,6 +820,8 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 //		assert(this_queue->tail->next == to_remove);
 		this_queue->head->prev = NULL;
 		this_queue->blocks_in_queue--;
+		if(!to_remove->peer)
+			save_block(realtime_wireshark_fd, to_remove->block);
 		free_packet_element(to_remove);
 	}
 	
@@ -958,6 +981,7 @@ static bool read_pcap_packet(struct tracers *this)
 			figure_out_clock_divisor(this);
 			this->interface_description = block;
 			this->interface_id = ++interface_id_seen;
+			save_block(realtime_wireshark_fd, block);
 			break;
 		default:
 			fprintf(stderr, "unknown block type  = 0x%x\n", block->type);
@@ -965,9 +989,8 @@ static bool read_pcap_packet(struct tracers *this)
 			break;
 	}
 #if 0
-	free_block(block);
-#endif
 	save_block(realtime_wireshark_fd, block);
+#endif
 		
 	return true;
 	
