@@ -30,6 +30,7 @@ static int max_queue_elements = 100;
 
 static struct timeval first_packet;
 
+/* for debugging */
 static char *mismatch_reason;
 
 static int verbose = 0;
@@ -71,7 +72,8 @@ struct tracers {
 	struct pcap_option_element *section_header_list;
 	unsigned char mac_addr[6];
 	int packets_read;
-	struct packet_queue packet_queue;
+	struct packet_queue packet_queue; 	/* packets coming in */
+	struct packet_queue old_queue;		/* some packets so we can start before a mismatch */
 	struct block_info *section_header;
 	struct block_info *interface_description;
 	int interface_id;	/* number to write  in packets */
@@ -894,6 +896,11 @@ static int compute_clock_divisor(char byte)
 }
 	
 		
+static void set_interface_id(struct block_info *block, int interface_id)
+{
+	*(int *) block->block_body = interface_id;	/* ??? */
+}
+ 
 static void figure_out_clock_divisor(struct tracers *tracer)
 {
 	struct pcap_option_element *option;
@@ -916,6 +923,7 @@ static void figure_out_clock_divisor(struct tracers *tracer)
 static bool read_pcap_packet(struct tracers *this)
 {
 	struct block_info *block;
+	static bool seen_section_header = false;;
 	
 	block = read_pcap_block(this->fd);
 	if(!block)
@@ -924,24 +932,32 @@ static bool read_pcap_packet(struct tracers *this)
 #if 0
 	print_block(block);
 #endif
+
 	if(this->save_fd >= 0) 
 		save_block(this->save_fd, block);
+
 	switch(block->type) {
 		case enhanced_packet_block:
 			queue_packet(this, block);
+			set_interface_id(block, this->interface_id);
 			break;
 		case section_header_block:
 			this->section_header_list = decode_header_options(block);
 			print_header_options(ascii_options_section_header, "section header", this->section_header_list);
 			
 			this->section_header = block;
-			break;
+			if(false == seen_section_header) {
+				seen_section_header = true;
+				save_block(realtime_wireshark_fd, block);
+			}
+			return true;
 		case interface_description:
 			this->interface_list = decode_interface_options(block);
 			print_header_options(ascii_options_interface_description, "interface_description",
 						this->interface_list);
 			figure_out_clock_divisor(this);
 			this->interface_description = block;
+			this->interface_id = ++interface_id_seen;
 			break;
 		default:
 			fprintf(stderr, "unknown block type  = 0x%x\n", block->type);
@@ -951,8 +967,7 @@ static bool read_pcap_packet(struct tracers *this)
 #if 0
 	free_block(block);
 #endif
-	if(this == lan)
-		save_block(realtime_wireshark_fd, block);
+	save_block(realtime_wireshark_fd, block);
 		
 	return true;
 	
@@ -1128,7 +1143,7 @@ static void terminate(void)
 		display_packet_list("lan", lan);
 		display_packet_list("wan", wan);
 	}
-#if 1
+#if 0
 	match_packets();
 #endif
 	find_unmatched_packets(wan);
