@@ -37,6 +37,10 @@ static int verbose = 0;
 static int ttl_same_counter = 0;
 static int ttl_off_by_one_counter = 0;
 
+static int realtime_wireshark_fd = -1;
+
+/* first one is 0, second is 1 */
+static int interface_id_seen = -1;
 struct packet_element {
 	int number;	/* order of packet read on the interface */
 	struct timeval enqueue_time;
@@ -68,6 +72,9 @@ struct tracers {
 	unsigned char mac_addr[6];
 	int packets_read;
 	struct packet_queue packet_queue;
+	struct block_info *section_header;
+	struct block_info *interface_description;
+	int interface_id;	/* number to write  in packets */
 	struct tracers *next;
 	struct tracers *prev;
 };
@@ -914,28 +921,39 @@ static bool read_pcap_packet(struct tracers *this)
 	if(!block)
 		return false;
 
+#if 0
 	print_block(block);
+#endif
 	if(this->save_fd >= 0) 
 		save_block(this->save_fd, block);
 	switch(block->type) {
 		case enhanced_packet_block:
 			queue_packet(this, block);
-			return true;
+			break;
 		case section_header_block:
 			this->section_header_list = decode_header_options(block);
 			print_header_options(ascii_options_section_header, "section header", this->section_header_list);
+			
+			this->section_header = block;
 			break;
 		case interface_description:
 			this->interface_list = decode_interface_options(block);
 			print_header_options(ascii_options_interface_description, "interface_description",
 						this->interface_list);
 			figure_out_clock_divisor(this);
+			this->interface_description = block;
 			break;
 		default:
 			fprintf(stderr, "unknown block type  = 0x%x\n", block->type);
+			free_block(block);
 			break;
-	}	
+	}
+#if 0
 	free_block(block);
+#endif
+	if(this == lan)
+		save_block(realtime_wireshark_fd, block);
+		
 	return true;
 	
 }
@@ -1121,6 +1139,39 @@ static void terminate(void)
 }
 
 
+static void setup_realtime_wireshark(void)
+{
+	int pipefd[2];
+	int result;
+	char *program = "wireshark-gtk";
+
+	result = pipe(pipefd);
+	if(result < 0) {
+		fprintf(stderr, "pipe failed: %s\n", strerror(errno));
+		exit(1);
+	}
+		
+	switch(fork()) {
+		case 0:
+			close(pipefd[1]);
+			close(0);
+			dup(pipefd[0]);
+			close(pipefd[0]);
+			execlp(program, program, "-k", "-i", "-", NULL);
+			fprintf(stderr, "cannot exec %s: %s\n", program, strerror(errno));
+			exit(1);
+		case -1:
+			fprintf(stderr, "forked failed: %s\n", strerror(errno));
+			exit(1);
+		default:
+			close(pipefd[0]);
+			realtime_wireshark_fd = pipefd[1];
+			break;
+	}
+	
+}
+
+
 
 int main(int argc, char *argv[])
 {
@@ -1172,6 +1223,7 @@ int main(int argc, char *argv[])
 	}
 
 
+	setup_realtime_wireshark();
 	wan =  do_tracer(true, wan_interface, wan_mac, filter);
 	lan = do_tracer(false, lan_interface, lan_mac, filter);
 
