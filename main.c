@@ -26,13 +26,16 @@ static char temp_dir[128];
 
 static bool save_pcaps = false;
 
-static int max_queue_elements = 1000;
+static int max_queue_elements = 100;
 
 static struct timeval first_packet;
 
 static char *mismatch_reason;
 
 static int verbose = 0;
+
+static int ttl_same = 0;
+static int ttl_off_by_one = 0;
 
 struct packet_element {
 	int number;	/* order of packet read on the interface */
@@ -170,7 +173,6 @@ static void print_ip_packet_info(const char *identifier, unsigned char *ip_heade
 	uint8_t version;
 	uint8_t ihl;
 
-
 	version = *ip_header >> 4;
 	ihl = *ip_header & 0xf;
 	total_length = ntohs(*(uint16_t *) (ip_header + 2));
@@ -265,6 +267,8 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 	char protocol_type;
 	int remaining_length;
 	bool is_pair = false;
+	unsigned char lan_ttl;
+	unsigned char wan_ttl;
 
 	mismatch_reason = "unknown";
 
@@ -281,22 +285,32 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 		return false;
 	}
 	protocol_type = *(wan_ip_header + 9);
+	wan_ttl = *(wan_ip_header + 8);
+	lan_ttl = *(lan_ip_header + 8);
 	if(true == incoming) {
-		/* ttl */
-#if 0
-		if(*(wan_ip_header + 8) != *(lan_ip_header + 8) + 1)
-			return false;
-#endif
 		/* source address */
 		if(*((uint32_t *) (wan_ip_header + 12)) != *((uint32_t *) (lan_ip_header + 12))) {
 			mismatch_reason = "source IPv4 address";
 			return false;
 		}
+#if 0
+		if((wan_ttl != lan_ttl + 1) && (wan_ttl != lan_ttl)) {
+			mismatch_reason = "ttl headers";
+			return false;	
+		}
+#endif
 	} else {
 		/* ttl */
 #if 0
 		if(*(lan_ip_header + 8) != *(wan_ip_header + 8) + 1)
 			return false;
+#else
+#if 0
+		if((wan_ttl+ 1 != lan_ttl) && (wan_ttl!= lan_ttl)) {
+			mismatch_reason = "ttl headers";
+			return false;	
+		}
+#endif
 #endif
 		/* destination address */
 		if(*((uint32_t *) (wan_ip_header + 16)) != *((uint32_t *) (lan_ip_header + 16))) {
@@ -304,8 +318,7 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 			return false;
 		}
 	}
-	assert(ip_header_size == 5);
-	ip_header_size *= 4;	/* convert to bytes from words */
+	assert(ip_header_size == 5); ip_header_size *= 4;	/* convert to bytes from words */
 	total_length = ntohs(*(uint16_t *) (lan_ip_header + 2));
 	remaining_length = total_length - ip_header_size;
 #if 0
@@ -331,6 +344,9 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 		default:
 			fprintf(stderr, "unknown protocol type = %d\n", protocol_type);
 			break;
+	}
+	if(true == is_pair) {
+		/* classify ttl */
 	}
 	return is_pair;	
 }
@@ -674,6 +690,35 @@ static double packet_delay(struct timeval *tv)
 	tmp += delta.tv_usec / 1000000.0;
 	return tmp;
 }
+static void try_to_find_peer(bool is_wan, struct packet_element *packet)
+{
+	if(true == is_wan) {
+		/* packet is wan packet */
+		struct packet_element *lan_packet;
+
+		for(lan_packet = lan->packet_queue.head; lan_packet; lan_packet = lan_packet->next) {
+			if(lan_packet->peer)
+				continue;
+			if(true == compare_packets(packet, lan_packet)) {
+				fprintf(stderr, "match wan packet %d with lan packet %d\n",
+					packet->number, lan_packet->number);
+				return;
+			}
+		}
+	} else {
+		struct packet_element *wan_packet;
+		
+		for(wan_packet = wan->packet_queue.head; wan_packet; wan_packet = wan_packet->next) {
+			if(wan_packet->peer)
+				continue;
+			if(true == compare_packets(wan_packet, packet)) {
+				fprintf(stderr, "match lan packet %d with wan packet %d\n",
+					packet->number, wan_packet->number);
+				return;
+			}
+		}
+	}
+}
 
 static void queue_packet(struct tracers *tracer, struct block_info *block)
 {
@@ -743,6 +788,8 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 		this_queue->blocks_in_queue--;
 		free_packet_element(to_remove);
 	}
+	
+	try_to_find_peer(tracer->wan, this_element);
 	
 }
 
@@ -1059,7 +1106,9 @@ static void terminate(void)
 		display_packet_list("lan", lan);
 		display_packet_list("wan", wan);
 	}
+#if 1
 	match_packets();
+#endif
 	find_unmatched_packets(wan);
 	find_unmatched_packets(lan);
 	exit(0);
