@@ -1,4 +1,3 @@
-KERNEL=="enx*", SYSFS{address}=="00:24:9b:11:df:b4", NAME="usb0"
 SUBSYSTEM=="net",  ACTION=="add", ATTR{address}=="70:b3:d5:eb:d4:83", NAME="chox-lan", RUN+="/sbin/ifconfig chox-lan up"
 SUBSYSTEM=="net",  ACTION=="add", ATTR{address}=="70:b3:d5:eb:d4:2c", NAME="chox-wan", RUN+="/sbin/ifconfig chox-wan up"
 
