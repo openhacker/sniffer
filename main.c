@@ -74,6 +74,7 @@ struct tracers {
 	struct pcap_option_element *section_header_list;
 	unsigned char mac_addr[6];
 	int packets_read;
+	int unmatched;	/* number of unmatched packets seen (match will subtract one) */
 	struct packet_queue packet_queue; 	/* packets coming in */
 	struct packet_queue old_queue;		/* some packets so we can start before a mismatch */
 	struct block_info *section_header;
@@ -89,6 +90,7 @@ static struct tracers *tracer_list;
 static struct tracers *lan;
 static struct tracers *wan;
 
+static void found_packet_match(struct packet_element *lan_element, struct packet_element *wan_element);
 
 static bool read_pcap_packet(struct tracers *this);
 
@@ -100,6 +102,12 @@ static void catch_child(int signo)
 static void catch_intr(int signo)
 {
 	sig_intr_caught = true;
+}
+
+static void save_block_to_wireshark(struct block_info *block)
+{
+	if(realtime_wireshark_fd >= 0) 
+		save_block(realtime_wireshark_fd, block);
 }
 
 static void print_tracer_packets(struct tracers *this)
@@ -424,10 +432,7 @@ static bool compare_packets(struct packet_element *lan_element, struct packet_el
 	}
 	
 	if(true == packet_pair) {
-		fprintf(stderr, "found pair: wan %d, lan %d\n", wan_element->number, lan_element->number);
-		packets_matched++;
-		lan_element->peer = wan_element;
-		wan_element->peer = lan_element;
+		found_packet_match(lan_element, wan_element);
 	} else if(wan_element->number == lan_element->number) {
 		fprintf(stderr, "No match -- number is the same\n");		
 		classify_packet("lan", lan_element);
@@ -789,6 +794,7 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	this_element->egress = egress;
 
 	this_element->number = ++tracer->packets_read;
+	++tracer->unmatched;
 	if(verbose > 0) 
 		fprintf(stderr, "%d: %s: %f  packet %s, direction %s\n",  this_element->number, tracer->interface,
 			 packet_delay(&this_element->enqueue_time),
@@ -959,6 +965,7 @@ static void figure_out_clock_divisor(struct tracers *tracer)
 	fprintf(stderr, "fraction divisor = %d\n", tracer->fraction_divisor);
 }
 
+
 /* return true for packet read, false for not */
 static bool read_pcap_packet(struct tracers *this)
 {
@@ -988,7 +995,7 @@ static bool read_pcap_packet(struct tracers *this)
 			this->section_header = block;
 			if(false == seen_section_header) {
 				seen_section_header = true;
-				save_block(realtime_wireshark_fd, block);
+				save_block_to_wireshark(block);
 			}
 			return true;
 		case interface_description:
@@ -998,16 +1005,13 @@ static bool read_pcap_packet(struct tracers *this)
 			figure_out_clock_divisor(this);
 			this->interface_description = block;
 			this->interface_id = ++interface_id_seen;
-			save_block(realtime_wireshark_fd, block);
+			save_block_to_wireshark(block);
 			break;
 		default:
 			fprintf(stderr, "unknown block type  = 0x%x\n", block->type);
 			free_block(block);
 			break;
 	}
-#if 0
-	save_block(realtime_wireshark_fd, block);
-#endif
 		
 	return true;
 	
@@ -1125,9 +1129,14 @@ static void display_packet_list(const char *type, struct tracers *tracer)
 
 static void found_packet_match(struct packet_element *lan_element, struct packet_element *wan_element)
 {
-	fprintf(stderr, "found match\n");
+	packets_matched++;
+	fprintf(stderr, "found match: wan %d, lan %d\n", wan_element->number, lan_element->number);
 	lan_element->peer = wan_element;
 	wan_element->peer = lan_element;
+	assert(wan->unmatched > 0);
+	assert(lan->unmatched > 0);
+	wan->unmatched--;
+	lan->unmatched--;
 }
 
 
@@ -1177,14 +1186,23 @@ static void find_unmatched_packets(struct tracers *this)
 	}
 }
 
-static void statistics(void)
+static void statistics()
 {
 	fprintf(stderr, "ttl same = %d, ttl off by one = %d\n",
 			ttl_same_counter, ttl_off_by_one_counter);
 	fprintf(stderr, "wan packets seen = %d, lan packets seen = %d\n", 
 			wan->packets_read, lan->packets_read);
 	fprintf(stderr, "packets matched = %d\n", packets_matched);
+	fprintf(stderr, "wan unmatched = %d, lan unmatched = %d\n",
+				wan->unmatched, lan->unmatched);
 			
+}
+
+static void match_and_find_unmatched(void)
+{
+	match_packets();
+	find_unmatched_packets(wan);
+	find_unmatched_packets(lan);
 }
 
 static void terminate(void)
@@ -1193,11 +1211,6 @@ static void terminate(void)
 		display_packet_list("lan", lan);
 		display_packet_list("wan", wan);
 	}
-#if 0
-	match_packets();
-	find_unmatched_packets(wan);
-	find_unmatched_packets(lan);
-#endif
 	statistics();
 	exit(0);
 }
@@ -1243,8 +1256,6 @@ int main(int argc, char *argv[])
 	create_temp_dir();
 	
 
-	signal(SIGCHLD, catch_child);
-	signal(SIGUSR1, statistics);
 	char *wan_interface;
 	unsigned char wan_mac[6];
 	char *lan_interface;
@@ -1297,7 +1308,16 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	
+	if(tracer_file != type_of_tracers) {
+		setup_realtime_wireshark();
+	} else {
+		match_packets();
+		statistics();
+		exit(0);
+	}
+		
+	signal(SIGCHLD, catch_child);
+	signal(SIGUSR1, statistics);
 	signal(SIGINT, catch_intr);
 
 	while(wan && lan) {
