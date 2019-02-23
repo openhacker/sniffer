@@ -1,0 +1,38 @@
+Chox needs an internal interface and an external interface.   For nomenclature, its called "lan" (the internal interface)
+and "wan" (the external interface).
+
+tshark and wireshark is used.  Its best if the user can run it natively (without becoming root).
+Depending on your distribution, there are instructions on how to do this.
+It seems encapsulated here:
+https://wiki.wireshark.org/CaptureSetup/CapturePrivileges
+
+chox needs you to specify the "lan" and "wan" ethernet devices and MAC addresses.
+Its best if you insert one at a time (so you know which is the which device).  It may take a little 
+tracing and intuition to figure out the mac addresses.
+
+Depending on the linux distribution and kernel options, the name of the device may be hard to understand.
+Recent linuxes have a usb ethernet labeled as:
+enx00249b224501
+
+An example of a udev rule to fix this problem is in 010_netnames.rules.
+Edit this as appropriate and insert in /etc/udev/rules.d and then
+do
+#udevadm control --reload-rules
+
+This makes devices called chox-wan and chox-lan.
+Running ifconfig shows the MAC address of the tap, modify the file with these addresses.
+Note the MAC addresses on the tap have nothing to do with the MAC addresses on the DUT.
+
+
+There's a script "run-chox.sh" which has to be edited (its configured for my instance.
+Chox supports the following options:
+
+The -f option specifies the tshark filter (currently defaulting to tcp).
+The way the script is written, you can specify a different filter by the environment:
+FILTER='tcp and host 1.2.3.4" ./run-chox.sh
+
+The -l and -w option is used to specify the wan and lan MAC address and tap devices.
+The syntax is:
+-l <tap device>:<lan MAC address>
+-w <tap device>:<wan MAC address>
+
