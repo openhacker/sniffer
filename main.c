@@ -531,10 +531,12 @@ static struct tracers *new_tracer(int fd, const char *pipe, const char *interfac
 	} else {
 		new->save_fd = -1;
 	}
+#if 0
 	if(tracer_file == type_of_tracers) {
 		while(read_pcap_packet(new))
 			;
 	}
+#endif
 	memcpy(new->mac_addr, mac_addr, 6);
 	return new;
 		
@@ -732,6 +734,7 @@ static double packet_delay(struct timeval *tv)
 }
 static void try_to_find_peer(bool is_wan, struct packet_element *packet)
 {
+	assert(packet->peer == NULL);
 	if(true == is_wan) {
 		/* packet is wan packet */
 		struct packet_element *lan_packet;
@@ -748,8 +751,9 @@ static void try_to_find_peer(bool is_wan, struct packet_element *packet)
 						true == result ? "match" : "no match", 
 						lan_packet->number);
 			}
-			if(true == result)
+			if(true == result) {
 				return;
+			}
 		}
 	} else {
 		struct packet_element *wan_packet;
@@ -765,8 +769,9 @@ static void try_to_find_peer(bool is_wan, struct packet_element *packet)
 					packet->number, true == result ? "match" : "no match",
 					wan_packet->number);
 			}
-			if(true == result)
+			if(true == result) {
 				return;
+			}
 		}
 	}
 }
@@ -794,6 +799,7 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	this_element->egress = egress;
 
 	this_element->number = ++tracer->packets_read;
+	fprintf(stderr, "%s read %d\n", true == tracer->wan ? "wan" : "lan", this_element->number);
 	++tracer->unmatched;
 	if(verbose > 0) 
 		fprintf(stderr, "%d: %s: %f  packet %s, direction %s\n",  this_element->number, tracer->interface,
@@ -843,8 +849,11 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 //		assert(this_queue->tail->next == to_remove);
 		this_queue->head->prev = NULL;
 		this_queue->blocks_in_queue--;
-		if(!to_remove->peer)
-			save_block(realtime_wireshark_fd, to_remove->block);
+		if(!to_remove->peer) {
+			fprintf(stderr, "No peer for %s: #%d\n", 
+				tracer->wan == true ? "wan" : "lan", to_remove->number);
+			save_block_to_wireshark(to_remove->block);
+		}
 		free_packet_element(to_remove);
 	}
 	
@@ -1049,7 +1058,7 @@ static void select_on_input(void)
 		}
 	}
 	if(result > 0) {
-		printf("result not cleared\n");
+		fprintf(stderr, "result not cleared\n");
 	}
 }
 
@@ -1070,6 +1079,7 @@ static void usage(void)
 	printf("-w -- specify wan (upstream) tap\n");
 	printf("-f -- tshark filter expression\n");
 	printf("-v -- verbose\n");
+	printf("-b -- max queue elements\n");
 	printf("\ttaps are expressed \"interface_name:<mac addr>\"\n");
 	exit(1);
 	
@@ -1249,6 +1259,12 @@ static void setup_realtime_wireshark(void)
 }
 
 
+static void load_interface(struct tracers *this)
+{
+	while(read_pcap_packet(this))
+		;
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -1265,14 +1281,19 @@ int main(int argc, char *argv[])
 		int c;
 		bool result;
 
-		c = getopt(argc, argv, "vsf:w:l:");
+		c = getopt(argc, argv, "b:vsf:w:l:");
 		if(-1 == c)
 			break;
 		switch(c) {
+			case 'b':
+				max_queue_elements = atoi(optarg);
+				fprintf(stderr, "new max queue = %d\n", max_queue_elements);
+				break; 
 			case 's':
 				save_pcaps = true;
 				break;
 			case 'l':
+
 				result = decode_interface(optarg, &lan_interface, lan_mac);
 				if(false == result) {
 					fprintf(stderr, "Need valid lan addresses: got %s\n", optarg);
@@ -1299,7 +1320,6 @@ int main(int argc, char *argv[])
 	}
 
 
-	setup_realtime_wireshark();
 	wan =  do_tracer(true, wan_interface, wan_mac, filter);
 	lan = do_tracer(false, lan_interface, lan_mac, filter);
 
@@ -1311,6 +1331,8 @@ int main(int argc, char *argv[])
 	if(tracer_file != type_of_tracers) {
 		setup_realtime_wireshark();
 	} else {
+		load_interface(lan);
+		load_interface(wan);
 		match_packets();
 		statistics();
 		exit(0);
