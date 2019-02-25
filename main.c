@@ -35,6 +35,8 @@ static char *mismatch_reason;
 
 static int verbose = 0;
 
+static bool track_packets = false;
+
 static int ttl_same_counter = 0;
 static int ttl_off_by_one_counter = 0;
 
@@ -799,7 +801,6 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	this_element->egress = egress;
 
 	this_element->number = ++tracer->packets_read;
-	fprintf(stderr, "%s read %d\n", true == tracer->wan ? "wan" : "lan", this_element->number);
 	++tracer->unmatched;
 	if(verbose > 0) 
 		fprintf(stderr, "%d: %s: %f  packet %s, direction %s\n",  this_element->number, tracer->interface,
@@ -816,6 +817,16 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	this_element->packet_time.tv_sec = seconds;
 	this_element->packet_time.tv_usec = fraction / tracer->fraction_divisor;
 			
+	if(true == track_packets) {
+		struct timeval delta;
+
+		timersub(&this_element->enqueue_time, &this_element->packet_time, &delta);
+		fprintf(stderr, "%s read %d, time = %f, delay = %ld.%06ld\n", 
+				true == tracer->wan ? "wan" : "lan", this_element->number,
+				packet_delay(&this_element->packet_time), delta.tv_sec, 
+				delta.tv_usec);
+	}
+
 	if(verbose > 0) {
 		fprintf(stderr, "ethertype = 0x%02x ", ntohs(*( unsigned short *) (block->packet + 12)));
 	// mac header is 14 bytes
@@ -1080,6 +1091,7 @@ static void usage(void)
 	printf("-f -- tshark filter expression\n");
 	printf("-v -- verbose\n");
 	printf("-b -- max queue elements\n");
+	printf("-t -- track packets\n");
 	printf("\ttaps are expressed \"interface_name:<mac addr>\"\n");
 	exit(1);
 	
@@ -1140,7 +1152,8 @@ static void display_packet_list(const char *type, struct tracers *tracer)
 static void found_packet_match(struct packet_element *lan_element, struct packet_element *wan_element)
 {
 	packets_matched++;
-	fprintf(stderr, "found match: wan %d, lan %d\n", wan_element->number, lan_element->number);
+	if(true == track_packets)
+		fprintf(stderr, "found match: wan %d, lan %d\n", wan_element->number, lan_element->number);
 	lan_element->peer = wan_element;
 	wan_element->peer = lan_element;
 	assert(wan->unmatched > 0);
@@ -1281,7 +1294,7 @@ int main(int argc, char *argv[])
 		int c;
 		bool result;
 
-		c = getopt(argc, argv, "b:vsf:w:l:");
+		c = getopt(argc, argv, "b:vsf:w:l:t");
 		if(-1 == c)
 			break;
 		switch(c) {
@@ -1313,6 +1326,9 @@ int main(int argc, char *argv[])
 			case 'f':
 				filter = strdup(optarg);
 				fprintf(stderr, "filter expression = \"%s\"\n", filter);
+				break;
+			case 't':
+				track_packets = true;
 				break;
 			default:
 				usage();
