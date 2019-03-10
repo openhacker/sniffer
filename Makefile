@@ -6,7 +6,7 @@ CFLAGS=-g  -Wall
 
 OBJS=main.o pcapreader.o
 
-PROGS=chox pcapreader
+PROGS=chox pcapreader capture
 
 all:	${PROGS}
 chox:	$(OBJS)
@@ -14,6 +14,9 @@ chox:	$(OBJS)
 
 pcapreader: pcapreader.c
 	${CC} -DDEBUG -o $@ $^ ${CFLAGS}
+
+capture:	capture.o
+	${CC} -o $@ $^  -lpcap
 
 clean:
 	-rm ${PROGS}
