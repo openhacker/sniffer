@@ -18,6 +18,8 @@
 
 #define SNAP_LEN   1518
 
+static int verbose = 0;
+
 
 enum opt_name {
         opt_endofopt = 0,
@@ -117,6 +119,9 @@ static int round_to_dword(int n)
 static void print_block(int i, struct block *p)
 {
 	int count;
+
+	if(!verbose)
+		return;
 	fprintf(stderr, "block #%d\n", i);
 	fprintf(stderr, "block  %d bytes\n", p->size);
 
@@ -293,11 +298,14 @@ int main(int argc, char *argv[])
 	while(1) {
 		int c;
 		
-		c = getopt(argc, argv, "i:w:f:");
+		c = getopt(argc, argv, "i:w:f:v");
 		if(-1 == c) 
 			break;
 
 		switch(c) {
+			case 'v':
+				verbose++;
+				break;
 			case 'i':
 				dev = strdup(optarg);
 				break;

@@ -617,9 +617,15 @@ static int run_tracer(const char *named_pipe,  const char *interface, const char
 	close_and_repopen(2, interface);
 	
 	if(filter)
-		execlp("tshark", "tshark", "-i",  interface,  "-w", 
+#if 0
+		execlp("dumpcap", "dumpcap", "-i",  interface,  "-w", 
 			named_pipe, "-f", filter, NULL);
-	else execlp("tshark", "tshark", "-i", interface, "-w", named_pipe, NULL);
+	else execlp("dumpcap", "dumpcap", "-i", interface, "-w", named_pipe, NULL);
+#else
+		execlp("capture", "capture", "-i",  interface,  "-w", 
+			named_pipe, "-f", filter, NULL);
+	else execlp("capture", "capture", "-i", interface, "-w", named_pipe, NULL);
+#endif
 	printf("should never get here\n");
 	exit(1);
 }
