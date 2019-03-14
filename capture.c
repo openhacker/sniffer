@@ -65,6 +65,9 @@ static struct block end_of_opt = {
 		.size = sizeof zero
 };
 
+static bool write_block(enum block_type type, ...);
+
+
 static void usage(void)
 {
 	fprintf(stderr, "capture -i <interface> -f <filter> -w output\n");
@@ -73,8 +76,28 @@ static void usage(void)
 
 static void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet)
 {
+	struct block packet_block;
+	unsigned char prefix[24];
+	struct block prefix_block = {
+		.data = prefix,
+		.size = sizeof prefix
+	};
+	uint64_t timestamp;
+
+	packet_block.data = packet;
+	packet_block.size = header->caplen;
+	timestamp = (header->ts.tv_sec * 1000000) + header->ts.tv_usec;
+	*(uint32_t *) prefix = 0;	/* interface id */
+	*(uint64_t *) (prefix + 4) = timestamp;
+	*(int32_t *) prefix = 0;	/* interface id */
+	*(int32_t *) (prefix + 12) =  header->caplen;
+	*(int32_t *) (prefix + 16) = header->len;
+
+	assert((header->caplen % 4) == 0);
 	fprintf(stderr, "\ntime = %ld:%06ld, caplen = %d, len = %d\n",
 			header->ts.tv_sec, header->ts.tv_usec, header->caplen, header->len);
+	
+	write_block(enhanced_packet_block, &prefix_block, &packet_block, NULL);
 }
 
 static int round_to_dword(int n)
