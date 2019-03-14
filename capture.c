@@ -77,32 +77,60 @@ static void usage(void)
 static void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet)
 {
 	struct block packet_block;
-	unsigned char prefix[24];
+	unsigned char prefix[20];
 	struct block prefix_block = {
 		.data = prefix,
 		.size = sizeof prefix
 	};
 	uint64_t timestamp;
+	uint32_t high_order_ts;
+	uint32_t low_order_ts;
 
 	packet_block.data = packet;
 	packet_block.size = header->caplen;
-	timestamp = (header->ts.tv_sec * 1000000) + header->ts.tv_usec;
-	*(uint32_t *) prefix = 0;	/* interface id */
-	*(uint64_t *) (prefix + 4) = timestamp;
+	timestamp = header->ts.tv_sec * 1000000L;
+	timestamp += header->ts.tv_usec;
+	high_order_ts = timestamp >> 32;
+	low_order_ts = (uint32_t ) (timestamp & 0xffffffffL);
+	fprintf(stderr, "timestamp = %lx, high order = %x, low order = %x\n",
+			timestamp, high_order_ts, low_order_ts);
+	*(uint32_t *) (prefix + 4) = high_order_ts;
+	*(uint32_t *) (prefix + 8) = low_order_ts;
 	*(int32_t *) prefix = 0;	/* interface id */
 	*(int32_t *) (prefix + 12) =  header->caplen;
 	*(int32_t *) (prefix + 16) = header->len;
 
-	assert((header->caplen % 4) == 0);
+	
 	fprintf(stderr, "\ntime = %ld:%06ld, caplen = %d, len = %d\n",
 			header->ts.tv_sec, header->ts.tv_usec, header->caplen, header->len);
 	
-	write_block(enhanced_packet_block, &prefix_block, &packet_block, NULL);
+	
+	write_block(enhanced_packet_block, &prefix_block, &packet_block, &end_of_opt, NULL);
 }
 
 static int round_to_dword(int n)
 {
 	return (n + 3)   & ~0x3;
+}
+
+
+static void print_block(int i, struct block *p)
+{
+	int count;
+	fprintf(stderr, "block #%d\n", i);
+	fprintf(stderr, "block  %d bytes\n", p->size);
+
+	for(count = 0; count < p->size; ) {
+		int loop;
+
+			
+		for(loop = 0; loop < 16 && count < p->size; count++, loop++) {
+			unsigned char c;
+			c =  *((char *) p->data + count);
+			fprintf(stderr, "x%02x %c " , c, isascii(c) ? c : ' ');
+		}
+		fprintf(stderr, "\n");
+	}
 }
 
 /* write a section of blocks -- compute how the total we need (each block needs to rounded up to  a double word */
@@ -115,6 +143,7 @@ static bool write_block(enum block_type type,  ...)
 	char block[MAX_BLOCK];
 	char *current;  // where inserting into current block;
 	int result;
+	int i = 0;
 
 	*(uint32_t *) block = type;
 
@@ -124,20 +153,24 @@ static bool write_block(enum block_type type,  ...)
 	va_start(ap, type);
 	while(1) {
 		struct block *this;
+		int actual_size;
 
 		this = va_arg(ap, struct block *);
 		if(!this) 
 			break;
 
+		print_block(i++, this);
 		memcpy(current, this->data, this->size);
-		current += this->size;
-		block_size += this->size;
+		actual_size = round_to_dword(this->size);		
+		current += actual_size;
+		block_size += actual_size;
 	}
 
-	*(int *) (block + block_size) = block_size + 4;
+	*(int32_t *) (block + block_size) = block_size + 4;
 	block_size += 4;
-	*(int *) (block + 4) = block_size;
+	*(int32_t *) (block + 4) = block_size;
 	result = write(output_fd, block, block_size);
+	fprintf(stderr, "wrote block of %d\n", block_size);
 	assert(result == block_size);
 	return true;	
 }
@@ -172,7 +205,6 @@ static void generate_section_header(void)
 	struct block *hardware;
 	struct block *os;
 	struct block *userappl;
-	struct block end_of_opt;
 	struct block prefix;
 	char prefix_data[16];
 	char hostname[HOST_NAME_MAX];
@@ -181,8 +213,6 @@ static void generate_section_header(void)
 	uint32_t zero = 0;
 	int result;
 	
-	end_of_opt.data = &zero;
-	end_of_opt.size = sizeof(zero);
 	
 	*(uint32_t *) prefix_data = 0x1a2b3c4d;
 	*(uint16_t *) (prefix_data + 4) = 1;
@@ -217,19 +247,26 @@ static void generate_interface_description(const char *interface, const char *fi
 	struct block *filter_option;
  	short prefix_data[4] = { 1, 0, 0, 0};
 	struct block prefix;
+	struct block resolution;
+	short resolv_data[3] = { if_tsresol, 1, 0x606 };	/* first 6 is useful */
+	
+	
 
 	prefix.data = prefix_data;
 	prefix.size = sizeof(prefix_data);
 
+	resolution.data = resolv_data;
+	resolution.size = 5;
+	
 	name_option = construct_ascii_option(if_name, interface);
 	filter_option = construct_ascii_option(if_filter, filter);
 
-	write_block(interface_description, &prefix, name_option, filter_option, &end_of_opt, NULL);
+	write_block(interface_description, &prefix, name_option, filter_option, &resolution, &end_of_opt, NULL);
 }
 
 static void prime_pcap_file(const char *interface, const char *filter, const char *filename)
 {
-	output_fd = open(filename, O_WRONLY | O_CREAT);
+	output_fd = open(filename, O_WRONLY | O_CREAT, 0644);
 	if(output_fd < 0) {
 		fprintf(stderr,  "Cannot create %s: %s\n", filename, strerror(errno));
 		exit(EXIT_FAILURE);
