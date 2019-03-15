@@ -864,7 +864,8 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 		assert(to_remove->prev == NULL);
 		this_queue->head = to_remove->next;
 //		assert(this_queue->tail->next == to_remove);
-		this_queue->head->prev = NULL;
+		if(this_queue->head)
+			this_queue->head->prev = NULL;
 		this_queue->blocks_in_queue--;
 		if(!to_remove->peer) {
 			fprintf(stderr, "No peer for %s: #%d\n", 
@@ -1050,6 +1051,10 @@ static void select_on_input(void)
 	struct tracers *this;
 	int result;
 	int max_fd = 0;
+	struct timeval timeout = {
+		.tv_sec = 0,
+		.tv_usec = 500000
+	};
 	
 
 	FD_ZERO(&set);
@@ -1059,13 +1064,12 @@ static void select_on_input(void)
 			max_fd = this->fd;
 	}
 	
-	result = select(max_fd + 1, &set, NULL, NULL, NULL);
+	result = select(max_fd + 1, &set, NULL, NULL, &timeout);
 	if(result < 0) {
 		fprintf(stderr, "Select failed %s\n", strerror(errno));
 		return;
 	}
 	if(result == 0) {
-		fprintf(stderr, "select returned 0?\n");
 		return;
 	}
 	for(this = tracer_list; this  && result > 0; this = this->next) {
@@ -1188,8 +1192,10 @@ static void match_packets(void)
 				found_packet_match(lan_element, wan_element);
 				break;
 			}  else { 
-				fprintf(stderr, "no match,  wan %d, lan %d: %s\n", 
+				if(verbose > 0) {
+					fprintf(stderr, "no match,  wan %d, lan %d: %s\n", 
 					wan_element->number, lan_element->number, mismatch_reason); 
+				}
 			}
 		}	
 	}
@@ -1285,6 +1291,50 @@ static void load_interface(struct tracers *this)
 }
 
 
+static void timeout_a_queue(struct tracers *interface, struct timeval *timeout)
+{
+	struct packet_queue *queue;
+	struct timeval current_time;
+	int packets_timedout = 0;
+
+	queue = &interface->packet_queue;
+
+	gettimeofday(&current_time, NULL);
+	while(queue->blocks_in_queue > 0) {
+		struct packet_element *to_test;
+		struct timeval delta;
+
+		to_test = queue->head;
+		timersub(&current_time, &to_test->packet_time, &delta);
+		if(timercmp(&delta, timeout, <))
+			break;
+		if(!to_test->peer) {
+			save_block_to_wireshark(to_test->block);
+		}
+		queue->head = to_test->next;
+		if(queue->head)
+			queue->head->prev = NULL;
+		queue->blocks_in_queue--;
+		free_packet_element(to_test);
+		packets_timedout++;
+		
+	}
+	if(packets_timedout) 
+		fprintf(stderr, "Timed out %d packets in queue %s\n", packets_timedout, 
+					identify_tracer(interface)); 
+}
+
+static void timeout_queues(void)
+{
+	struct timeval timeout = {
+		.tv_sec = 1,
+		.tv_usec = 0
+	};
+
+	timeout_a_queue(wan, &timeout);
+	timeout_a_queue(lan, &timeout);
+}
+
 int main(int argc, char *argv[])
 {
 	char *filter = "icmp";
@@ -1372,6 +1422,8 @@ int main(int argc, char *argv[])
 		if(true == sig_intr_caught) {
 			terminate();
 		}
+		
+		timeout_queues();
 		select_on_input();
 	}
 	return 0;

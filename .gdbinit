@@ -1,1 +1,0 @@
-handle SIGINT nostop pass

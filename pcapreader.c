@@ -149,7 +149,6 @@ static struct pcap_option_element *read_option(bool section_header, char *body, 
 				element->name = option_code;
 				element->type = char_pointer;
 				element->value = strndup( body + 1, option_length - 1);
-				assert(*body == 0);
 #endif
 				
 				
