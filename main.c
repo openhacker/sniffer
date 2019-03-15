@@ -43,6 +43,12 @@ static int ttl_off_by_one_counter = 0;
 static int packets_matched = 0;
 
 static int realtime_wireshark_fd = -1;
+static int mismatched_packet_fd = -1;
+
+
+/* consecutive packets on interface -- count them */
+static int consec_wan_read = 0;
+static int consec_lan_read = 0;
 
 /* first one is 0, second is 1 */
 static int interface_id_seen = -1;
@@ -110,6 +116,8 @@ static void save_block_to_wireshark(struct block_info *block)
 {
 	if(realtime_wireshark_fd >= 0) 
 		save_block(realtime_wireshark_fd, block);
+	if(mismatched_packet_fd >= 0) 
+		save_block(mismatched_packet_fd, block);
 }
 
 static void print_tracer_packets(struct tracers *this)
@@ -436,9 +444,11 @@ static bool compare_packets(struct packet_element *lan_element, struct packet_el
 	if(true == packet_pair) {
 		found_packet_match(lan_element, wan_element);
 	} else if(wan_element->number == lan_element->number) {
-		fprintf(stderr, "No match -- number is the same\n");		
-		classify_packet("lan", lan_element);
-		classify_packet("wan", wan_element);
+		if(verbose)  {
+			fprintf(stderr, "No match -- number is the same\n");		
+			classify_packet("lan", lan_element);
+			classify_packet("wan", wan_element);
+		}
 	}
 	
 	return packet_pair;
@@ -873,8 +883,9 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 		}
 		this_queue->blocks_in_queue--;
 		if(!to_remove->peer) {
-			fprintf(stderr, "No peer for %s: #%d\n", 
-				tracer->wan == true ? "wan" : "lan", to_remove->number);
+			if(verbose)
+				fprintf(stderr, "No peer for %s: #%d\n", 
+					tracer->wan == true ? "wan" : "lan", to_remove->number);
 			save_block_to_wireshark(to_remove->block);
 		}
 		free_packet_element(to_remove);
@@ -1079,6 +1090,17 @@ static void select_on_input(void)
 	}
 	for(this = tracer_list; this  && result > 0; this = this->next) {
 		if(FD_ISSET(this->fd, &set)) {
+			if(true == this->wan) {
+				if(consec_lan_read > 10) 
+					fprintf(stderr, "consec lan read = %d\n", consec_lan_read);
+				consec_lan_read = 0;
+				consec_wan_read++;
+			} else {
+				if(consec_wan_read > 10) 
+					fprintf(stderr, "conec wan read = %d\n", consec_wan_read);
+				consec_wan_read = 0;
+				consec_lan_read++;
+			}
 			read_pcap_packet(this);
 			result--;
 		}
@@ -1256,12 +1278,25 @@ static void terminate(void)
 }
 
 
+static void setup_mismatched_file(void)
+{
+	char mismatched_name[128];
+
+	sprintf(mismatched_name, "mismatched.%d.pcapng", getpid());
+	mismatched_packet_fd = open(mismatched_name, O_WRONLY | O_CREAT, 0644);
+	if(mismatched_packet_fd < 0) {
+		fprintf(stderr, "cannot created %s: %s\n", mismatched_name, strerror(errno));
+	}
+	
+}
+
 static void setup_realtime_wireshark(void)
 {
 	int pipefd[2];
 	int result;
 	char *program = "wireshark-gtk";
 
+	setup_mismatched_file();
 	result = pipe(pipefd);
 	if(result < 0) {
 		fprintf(stderr, "pipe failed: %s\n", strerror(errno));
