@@ -864,8 +864,13 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 		assert(to_remove->prev == NULL);
 		this_queue->head = to_remove->next;
 //		assert(this_queue->tail->next == to_remove);
-		if(this_queue->head)
+		if(this_queue->head) {
 			this_queue->head->prev = NULL;
+		} else {
+			assert(this_queue->tail == to_remove);
+			assert(this_queue->blocks_in_queue  == 1);
+			this_queue->tail = NULL;
+		}
 		this_queue->blocks_in_queue--;
 		if(!to_remove->peer) {
 			fprintf(stderr, "No peer for %s: #%d\n", 
@@ -1312,8 +1317,16 @@ static void timeout_a_queue(struct tracers *interface, struct timeval *timeout)
 			save_block_to_wireshark(to_test->block);
 		}
 		queue->head = to_test->next;
-		if(queue->head)
+		if(queue->head) {
 			queue->head->prev = NULL;
+		} else {
+			/* one element queue */
+			assert(queue->tail == to_test);
+			assert(queue->blocks_in_queue == 1);
+			queue->tail  = NULL;
+		}
+
+		
 		queue->blocks_in_queue--;
 		free_packet_element(to_test);
 		packets_timedout++;
