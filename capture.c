@@ -94,7 +94,8 @@ static void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_c
 	timestamp += header->ts.tv_usec;
 	high_order_ts = timestamp >> 32;
 	low_order_ts = (uint32_t ) (timestamp & 0xffffffffL);
-	fprintf(stderr, "timestamp = %lx, high order = %x, low order = %x\n",
+	if(verbose > 0)
+		fprintf(stderr, "timestamp = %lx, high order = %x, low order = %x\n",
 			timestamp, high_order_ts, low_order_ts);
 	*(uint32_t *) (prefix + 4) = high_order_ts;
 	*(uint32_t *) (prefix + 8) = low_order_ts;
@@ -103,7 +104,8 @@ static void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_c
 	*(int32_t *) (prefix + 16) = header->len;
 
 	
-	fprintf(stderr, "\ntime = %ld:%06ld, caplen = %d, len = %d\n",
+	if(verbose > 0) 
+		fprintf(stderr, "\ntime = %ld:%06ld, caplen = %d, len = %d\n",
 			header->ts.tv_sec, header->ts.tv_usec, header->caplen, header->len);
 	
 	
@@ -175,7 +177,8 @@ static bool write_block(enum block_type type,  ...)
 	block_size += 4;
 	*(int32_t *) (block + 4) = block_size;
 	result = write(output_fd, block, block_size);
-	fprintf(stderr, "wrote block of %d\n", block_size);
+	if(verbose > 0) 
+		fprintf(stderr, "wrote block of %d\n", block_size);
 	assert(result == block_size);
 	return true;	
 }

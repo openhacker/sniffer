@@ -28,6 +28,8 @@ static bool save_pcaps = false;
 
 static int max_queue_elements = 100;
 
+static bool save_mismatches = false;
+
 static struct timeval first_packet;
 
 /* for debugging */
@@ -114,6 +116,9 @@ static void catch_intr(int signo)
 
 static void save_block_to_wireshark(struct block_info *block)
 {
+	static int i = 0;
+
+	fprintf(stderr, "wireshark block %d\n", i++);
 	if(realtime_wireshark_fd >= 0) 
 		save_block(realtime_wireshark_fd, block);
 	if(mismatched_packet_fd >= 0) 
@@ -1092,12 +1097,14 @@ static void select_on_input(void)
 		if(FD_ISSET(this->fd, &set)) {
 			if(true == this->wan) {
 				if(consec_lan_read > 10) 
-					fprintf(stderr, "consec lan read = %d\n", consec_lan_read);
+					fprintf(stderr, "consec lan read = %d, head = %d\n", 
+						consec_lan_read, lan->packet_queue.head->number);
 				consec_lan_read = 0;
 				consec_wan_read++;
 			} else {
 				if(consec_wan_read > 10) 
-					fprintf(stderr, "conec wan read = %d\n", consec_wan_read);
+					fprintf(stderr, "conec wan read = %d, wan = %d\n", 
+						consec_wan_read, wan->packet_queue.header->number);
 				consec_wan_read = 0;
 				consec_lan_read++;
 			}
@@ -1282,6 +1289,9 @@ static void setup_mismatched_file(void)
 {
 	char mismatched_name[128];
 
+	if(false == save_mismatches)
+		return;
+
 	sprintf(mismatched_name, "mismatched.%d.pcapng", getpid());
 	mismatched_packet_fd = open(mismatched_name, O_WRONLY | O_CREAT, 0644);
 	if(mismatched_packet_fd < 0) {
@@ -1398,10 +1408,13 @@ int main(int argc, char *argv[])
 		int c;
 		bool result;
 
-		c = getopt(argc, argv, "b:vsf:w:l:t");
+		c = getopt(argc, argv, "b:vsf:w:l:tm");
 		if(-1 == c)
 			break;
 		switch(c) {
+			case 'm':
+				save_mismatches = true;
+				break;
 			case 'b':
 				max_queue_elements = atoi(optarg);
 				fprintf(stderr, "new max queue = %d\n", max_queue_elements);
