@@ -1066,6 +1066,20 @@ static bool read_pcap_packet(struct tracers *this)
 }
 
 
+static void show_consec(const char *type, int consec, int packet_number, struct timeval *when_started)
+{
+	struct timeval now;
+	struct timeval delta;
+	double micros;
+
+
+	gettimeofday(&now, NULL);
+	timersub(&now, when_started, &delta);
+	micros = delta.tv_sec * 1000000.0;
+	micros += delta.tv_usec;
+	fprintf(stderr, "%s: %d packets (%d), %.03f msec\n", type, consec, packet_number, micros / 1000.0);
+}
+
 static void select_on_input(void)
 {
 	fd_set set;
@@ -1076,6 +1090,9 @@ static void select_on_input(void)
 		.tv_sec = 0,
 		.tv_usec = 500000
 	};
+	static struct timeval when_consec_started;
+	static int consec_lan_read = 0;
+	static int consec_wan_read = 0;	
 	
 
 	FD_ZERO(&set);
@@ -1093,18 +1110,23 @@ static void select_on_input(void)
 	if(result == 0) {
 		return;
 	}
+
 	for(this = tracer_list; this  && result > 0; this = this->next) {
 		if(FD_ISSET(this->fd, &set)) {
 			if(true == this->wan) {
-				if(consec_lan_read > 10) 
-					fprintf(stderr, "consec lan read = %d, head = %d\n", 
-						consec_lan_read, lan->packet_queue.head->number);
+				if(consec_lan_read > 20)  {
+					show_consec("lan", consec_lan_read, lan->packet_queue.head->number,	
+							&when_consec_started);
+				}
+				gettimeofday(&when_consec_started, NULL);
 				consec_lan_read = 0;
 				consec_wan_read++;
 			} else {
-				if(consec_wan_read > 10) 
-					fprintf(stderr, "conec wan read = %d, wan = %d\n", 
-						consec_wan_read, wan->packet_queue.header->number);
+				if(consec_wan_read > 20)  {
+					show_consec("wan", consec_wan_read, wan->packet_queue.head->number,	
+							&when_consec_started);
+				}
+				gettimeofday(&when_consec_started, NULL);
 				consec_wan_read = 0;
 				consec_lan_read++;
 			}
