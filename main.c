@@ -39,6 +39,8 @@ static int verbose = 0;
 
 static bool track_packets = false;
 
+static char *capture_program = "dumpcap";
+
 static int ttl_same_counter = 0;
 static int ttl_off_by_one_counter = 0;
 
@@ -47,10 +49,12 @@ static int packets_matched = 0;
 static int realtime_wireshark_fd = -1;
 static int mismatched_packet_fd = -1;
 
+struct consec_stats {
+	int num_bursts;
+	int num_packets;
+	int max_burst;
+};
 
-/* consecutive packets on interface -- count them */
-static int consec_wan_read = 0;
-static int consec_lan_read = 0;
 
 /* first one is 0, second is 1 */
 static int interface_id_seen = -1;
@@ -632,15 +636,10 @@ static int run_tracer(const char *named_pipe,  const char *interface, const char
 	close_and_repopen(2, interface);
 	
 	if(filter)
-#if 0
-		execlp("dumpcap", "dumpcap", "-i",  interface,  "-w", 
+		execlp(capture_program, capture_program, "-i",  interface,  "-w", 
 			named_pipe, "-f", filter, NULL);
-	else execlp("dumpcap", "dumpcap", "-i", interface, "-w", named_pipe, NULL);
-#else
-		execlp("capture", "capture", "-i",  interface,  "-w", 
-			named_pipe, "-f", filter, NULL);
-	else execlp("capture", "capture", "-i", interface, "-w", named_pipe, NULL);
-#endif
+	else execlp(capture_program, capture_program,  "-i", interface, "-w", named_pipe, NULL);
+
 	printf("should never get here\n");
 	exit(1);
 }
@@ -1151,13 +1150,16 @@ static void create_temp_dir(void)
 
 static void usage(void) 
 {
+	printf("chox [-s] [-m]  -l lan -w wan [-f filter] [-v] [-b num] [-t] [-c capture]\n");
 	printf("-s -- save pcaps\n");
 	printf("-l -- specify lan (downstream) tap\n");
 	printf("-w -- specify wan (upstream) tap\n");
+	printf("-m -- save mismatches to pcapng file\n");
 	printf("-f -- tshark filter expression\n");
 	printf("-v -- verbose\n");
 	printf("-b -- max queue elements\n");
 	printf("-t -- track packets\n");
+	printf("-c <capture program> (default %s)\n", capture_program);
 	printf("\ttaps are expressed \"interface_name:<mac addr>\"\n");
 	exit(1);
 	
@@ -1430,10 +1432,13 @@ int main(int argc, char *argv[])
 		int c;
 		bool result;
 
-		c = getopt(argc, argv, "b:vsf:w:l:tm");
+		c = getopt(argc, argv, "c:b:vsf:w:l:tm");
 		if(-1 == c)
 			break;
 		switch(c) {
+			case 'c':
+				capture_program = strdup(optarg);
+				break;
 			case 'm':
 				save_mismatches = true;
 				break;
