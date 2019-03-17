@@ -1122,7 +1122,7 @@ static void select_on_input(void)
 		if(FD_ISSET(this->fd, &set)) {
 			if(true == this->wan) {
 				if(consec_lan_read > 20)  {
-					show_consec("lan", consec_lan_read, lan->packet_queue.head->number,	
+					show_consec("lan", consec_lan_read, lan->packets_read,	
 							&when_consec_started);
 				}
 				gettimeofday(&when_consec_started, NULL);
@@ -1130,7 +1130,7 @@ static void select_on_input(void)
 				consec_wan_read++;
 			} else {
 				if(consec_wan_read > 20)  {
-					show_consec("wan", consec_wan_read, wan->packet_queue.head->number,	
+					show_consec("wan", consec_wan_read, wan->packets_read,	
 							&when_consec_started);
 				}
 				gettimeofday(&when_consec_started, NULL);
