@@ -41,6 +41,8 @@ static bool track_packets = false;
 
 static char *capture_program = "dumpcap";
 
+static char mismatched_name[128];
+
 static int ttl_same_counter = 0;
 static int ttl_off_by_one_counter = 0;
 
@@ -104,6 +106,8 @@ static struct tracers *tracer_list;
 static struct tracers *lan;
 static struct tracers *wan;
 
+static int no_peers = 0;	/* number of mismatched packets */
+
 static void found_packet_match(struct packet_element *lan_element, struct packet_element *wan_element);
 
 static bool read_pcap_packet(struct tracers *this);
@@ -120,9 +124,6 @@ static void catch_intr(int signo)
 
 static void save_block_to_wireshark(struct block_info *block)
 {
-	static int i = 0;
-
-	fprintf(stderr, "wireshark block %d\n", i++);
 	if(realtime_wireshark_fd >= 0) 
 		save_block(realtime_wireshark_fd, block);
 	if(mismatched_packet_fd >= 0) 
@@ -1313,13 +1314,14 @@ static void terminate(void)
 		display_packet_list("wan", wan);
 	}
 	statistics();
+	if(mismatched_packet_fd >= 0 && 0 == no_peers)
+		unlink(mismatched_name);
 	exit(0);
 }
 
 
 static void setup_mismatched_file(void)
 {
-	char mismatched_name[128];
 
 	if(false == save_mismatches)
 		return;
@@ -1391,8 +1393,10 @@ static void timeout_a_queue(struct tracers *interface, struct timeval *timeout)
 		if(timercmp(&delta, timeout, <))
 			break;
 		if(!to_test->peer) {
+			no_peers++;
 			save_block_to_wireshark(to_test->block);
 		}
+
 		queue->head = to_test->next;
 		if(queue->head) {
 			queue->head->prev = NULL;
