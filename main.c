@@ -416,18 +416,22 @@ static bool compare_packets(struct packet_element *lan_element, struct packet_el
 #endif
 
 	if(lan_element->egress == false && wan_element->egress == true) {
+#ifdef TEST_TIMES
 		/* packet from lan to wan */
 		if(timercmp(&lan_element->packet_time, &wan_element->packet_time, >)) {
 			mismatch_reason = "lan > wan time";
 			return false;
 		}
+#endif
 		incoming = false;
 	} else if(true == lan_element->egress  && false == wan_element->egress) {
 		/* packet from wan to lan */
+#ifdef TEST_TIMES
 		if(timercmp(&lan_element->packet_time, &wan_element->packet_time, <)) {
 			mismatch_reason = "wan < lan time";
 			return false;
 		}
+#endif
 		incoming = true;
 	} else {
 		mismatch_reason = "wrong ingress/egress";
