@@ -1126,16 +1126,20 @@ static void select_on_input(void)
 					show_consec("lan", consec_lan_read, lan->packets_read,	
 							&when_consec_started);
 				}
-				gettimeofday(&when_consec_started, NULL);
-				consec_lan_read = 0;
+				if(consec_lan_read > 0) {
+					gettimeofday(&when_consec_started, NULL);
+					consec_lan_read = 0;
+				}
 				consec_wan_read++;
 			} else {
 				if(consec_wan_read > 20)  {
 					show_consec("wan", consec_wan_read, wan->packets_read,	
 							&when_consec_started);
 				}
-				gettimeofday(&when_consec_started, NULL);
-				consec_wan_read = 0;
+				if(consec_wan_read > 0) {
+					gettimeofday(&when_consec_started, NULL);
+					consec_wan_read = 0;
+				}
 				consec_lan_read++;
 			}
 			read_pcap_packet(this);
