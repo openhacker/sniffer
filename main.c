@@ -675,6 +675,10 @@ static struct tracers *do_tracer(bool wan, const char *interface, unsigned char 
 	}
 
 	
+	if(!interface) {
+		fprintf(stderr, "no %s interface/file\n", type_of_stream);
+		exit(1);
+	}
 
 	fd = open(interface, O_RDONLY);
 	if(fd >= 0) {
@@ -1423,9 +1427,9 @@ int main(int argc, char *argv[])
 	create_temp_dir();
 	
 
-	char *wan_interface;
+	char *wan_interface = NULL;
 	unsigned char wan_mac[6];
-	char *lan_interface;
+	char *lan_interface = NULL;
 	unsigned char lan_mac[6];
 
 	while(1) {
