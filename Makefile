@@ -6,7 +6,7 @@ CFLAGS=-g  -Wall
 
 OBJS=main.o pcapreader.o
 
-PROGS=chox pcapreader capture
+PROGS=chox 
 
 all:	${PROGS}
 chox:	$(OBJS)
