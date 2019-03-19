@@ -26,9 +26,12 @@ static char temp_dir[128];
 
 static bool save_pcaps = false;
 
+static bool show_consec_packets = false;
 static int max_queue_elements = 100;
 
 static bool save_mismatches = false;
+
+static int prepend_queue = 10;
 
 static struct timeval first_packet;
 
@@ -40,6 +43,7 @@ static int verbose = 0;
 static bool track_packets = false;
 
 static char *capture_program = "dumpcap";
+static char *config_file = NULL;
 
 static char mismatched_name[128];
 
@@ -66,6 +70,7 @@ struct packet_element {
 	struct timeval packet_time;	/* from pcap with divisor and conversions */	
 	struct block_info *block;
 	bool egress;	/* true for coming in, false for going out */
+	bool passed_inner_filter;   /* if true, passes inner filter */
 	struct packet_element *peer;	/* matching packet on other interface */
 	struct packet_element *next;
 	struct packet_element *prev;
@@ -763,6 +768,8 @@ static double packet_delay(struct timeval *tv)
 	tmp += delta.tv_usec / 1000000.0;
 	return tmp;
 }
+
+
 static void try_to_find_peer(bool is_wan, struct packet_element *packet)
 {
 	assert(packet->peer == NULL);
@@ -806,6 +813,93 @@ static void try_to_find_peer(bool is_wan, struct packet_element *packet)
 		}
 	}
 }
+
+
+/* test if packet passes inner filter rules -- if no inner filter, than all packets pass */
+static void test_inner_filter(struct packet_element *this_element)
+{
+	this_element->passed_inner_filter = true;
+}
+
+/* look to see if this packet has a peer -- if not, write out to wireshark the prepend queue (emptying queue)
+ * and this packet
+ */
+static void move_to_old_queue(struct tracers *this_tracer, struct packet_element *this_element)
+{
+	if(true == this_element->passed_inner_filter && !this_element->peer) {
+		/* save prequeue and this element to wireshark */
+		struct packet_element *to_remove;
+		struct packet_queue *queue;
+	
+		queue = &this_tracer->old_queue;
+
+		to_remove = queue->head;
+//		for(to_remove = queue->head; to_remove; to_remove = this_tracer->old_queue->head) {
+		while(to_remove) {
+			save_block_to_wireshark(to_remove->block);
+			queue->head = to_remove->next;
+			queue->blocks_in_queue--;	
+
+			free_packet_element(to_remove);
+
+			if(queue->head) {
+				queue->head->prev = NULL;
+				assert(queue->blocks_in_queue > 0);
+			} else {
+				queue->head = NULL;
+				queue->tail = NULL;
+				assert(queue->blocks_in_queue == 0);
+			}
+			to_remove = queue->head;
+			
+		}
+		save_block_to_wireshark(this_element->block);
+		free_packet_element(to_remove);
+	} else {
+		/* add the element to the old_queue, maybe freeing the head element if too big */
+		struct packet_queue *queue;
+
+		if(0 == prepend_queue)  {
+			free_packet_element(this_element);
+			return;
+		}
+
+		queue = &this_tracer->old_queue;
+		queue->blocks_in_queue++;
+		if(queue->blocks_in_queue > prepend_queue) {
+			/* pop off the head element */
+			struct packet_element *to_remove;
+
+			to_remove = queue->head;
+			queue->head = to_remove->next;
+			if(NULL == queue->head) {
+				queue->tail = NULL;
+				/* queue should be empty -- need to insert one element */
+				assert(queue->blocks_in_queue == 1);
+			} else	{
+				queue->head->prev = NULL;
+			}
+			free_packet_element(to_remove);
+			queue->blocks_in_queue--;
+		}
+		
+		/* add this element to the tail -- already incremented */
+		if(NULL == queue->head) {
+			/* empty queue */
+			assert(NULL == queue->tail);
+			queue->head = queue->tail = this_element;
+			this_element->next = this_element->prev = NULL;
+			assert(1 == queue->blocks_in_queue);
+		} else {
+			assert(queue->tail);	
+			this_element->prev = queue->tail;
+			queue->tail->next = this_element;
+			queue->tail = this_element;
+			this_element->next = NULL;
+		}
+	}
+}
+
 
 static void queue_packet(struct tracers *tracer, struct block_info *block)
 {
@@ -895,13 +989,18 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 			this_queue->tail = NULL;
 		}
 		this_queue->blocks_in_queue--;
+#if 0
 		if(!to_remove->peer) {
 			if(verbose)
 				fprintf(stderr, "No peer for %s: #%d\n", 
 					tracer->wan == true ? "wan" : "lan", to_remove->number);
 			save_block_to_wireshark(to_remove->block);
 		}
+#endif
+		move_to_old_queue(tracer, to_remove);
+#if 0
 		free_packet_element(to_remove);
+#endif
 	}
 	
 	try_to_find_peer(tracer->wan, this_element);
@@ -1022,6 +1121,7 @@ static void figure_out_clock_divisor(struct tracers *tracer)
 }
 
 
+
 /* return true for packet read, false for not */
 static bool read_pcap_packet(struct tracers *this)
 {
@@ -1080,6 +1180,9 @@ static void show_consec(const char *type, int consec, int packet_number, struct 
 	struct timeval delta;
 	double micros;
 
+
+	if(false == show_consec_packets)
+		return;
 
 	gettimeofday(&now, NULL);
 	timersub(&now, when_started, &delta);
@@ -1163,7 +1266,7 @@ static void create_temp_dir(void)
 
 static void usage(void) 
 {
-	printf("chox [-s] [-m]  -l lan -w wan [-f filter] [-v] [-b num] [-t] [-c capture]\n");
+	printf("chox [-s] [-m] [-q prepend queue] [-c file]  -l lan -w wan [-f filter] [-v] [-b num] [-t] [-d capture]\n");
 	printf("-s -- save pcaps\n");
 	printf("-l -- specify lan (downstream) tap\n");
 	printf("-w -- specify wan (upstream) tap\n");
@@ -1172,7 +1275,9 @@ static void usage(void)
 	printf("-v -- verbose\n");
 	printf("-b -- max queue elements\n");
 	printf("-t -- track packets\n");
-	printf("-c <capture program> (default %s)\n", capture_program);
+	printf("-d <capture program> (default %s)\n", capture_program);
+	printf("-c <config file> -- specify config file\n");
+	printf("-q <prepend number> -- packets in front of anomoly (default = %d)\n", prepend_queue);	
 	printf("\ttaps are expressed \"interface_name:<mac addr>\"\n");
 	exit(1);
 	
@@ -1448,11 +1553,11 @@ int main(int argc, char *argv[])
 		int c;
 		bool result;
 
-		c = getopt(argc, argv, "c:b:vsf:w:l:tm");
+		c = getopt(argc, argv, "c:q:d:pb:vsf:w:l:tm");
 		if(-1 == c)
 			break;
 		switch(c) {
-			case 'c':
+			case 'd':
 				capture_program = strdup(optarg);
 				break;
 			case 'm':
@@ -1462,6 +1567,9 @@ int main(int argc, char *argv[])
 				max_queue_elements = atoi(optarg);
 				fprintf(stderr, "new max queue = %d\n", max_queue_elements);
 				break; 
+			case 'c':
+				config_file = strdup(optarg);
+				break;
 			case 's':
 				save_pcaps = true;
 				break;
@@ -1473,6 +1581,13 @@ int main(int argc, char *argv[])
 					exit(1);
 				}
 				break;	
+			case 'q':
+				prepend_queue = strtol(optarg, NULL, 0);
+				fprintf(stderr, "new prepend queue = %d\n", prepend_queue);
+				break;
+			case 'p':
+				show_consec_packets = true;
+				break;
 			case 'w':
 				result = decode_interface(optarg, &wan_interface, wan_mac);
 				if(false == result) {
