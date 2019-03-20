@@ -2,7 +2,8 @@
 
 
 
-CFLAGS=-g  -Wall
+# OPT=-O2
+CFLAGS=-g  -Wall ${OPT}
 
 OBJS=main.o pcapreader.o
 

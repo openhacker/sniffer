@@ -722,6 +722,9 @@ static struct tracers *do_tracer(bool wan, const char *interface, unsigned char 
 
 static void free_packet_element(struct packet_element *this)
 {
+#if 0
+	fprintf(stderr, "free packet element: %p\n", this);
+#endif
 	free_block(this->block);
 	free(this);
 }
@@ -851,7 +854,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 			
 		}
 		save_block_to_wireshark(this_element->block);
-		free_packet_element(to_remove);
+		free_packet_element(this_element);
 	} else {
 		/* add the element to the old_queue, maybe freeing the head element if too big */
 		struct packet_queue *queue;
@@ -881,6 +884,9 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		}
 		
 		/* add this element to the tail -- already incremented */
+#if 0
+		fprintf(stderr, "add element to old queue = %p\n", this_element);
+#endif
 		if(NULL == queue->head) {
 			/* empty queue */
 			assert(NULL == queue->tail);
@@ -1501,6 +1507,13 @@ static void timeout_a_queue(struct tracers *interface, struct timeval *timeout)
 
 		to_test = queue->head;
 		timersub(&current_time, &to_test->packet_time, &delta);
+#if 0
+		fprintf(stderr, "current time = %ld.%06ld, totest = %ld.%06ld, delta = %ld.%06ld, timeout = %ld.%06ld\n",
+				current_time.tv_sec, current_time.tv_usec,
+					to_test->packet_time.tv_sec, to_test->packet_time.tv_usec,
+					delta.tv_sec, delta.tv_usec,
+					timeout->tv_sec, timeout->tv_usec);
+#endif
 		if(timercmp(&delta, timeout, <))
 			break;
 #if 0
