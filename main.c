@@ -523,7 +523,7 @@ static void reap_children(void)
 				return;
 			default:
 				if(false == sig_intr_caught) {
-					fprintf(stderr, "unplanned child died\n");
+					fprintf(stderr, "child died %d\n", pid);
 					exit(1);
 				}
 				remove_tracer(pid);
@@ -562,12 +562,8 @@ static struct tracers *new_tracer(int fd, const char *pipe, const char *interfac
 	} else {
 		new->save_fd = -1;
 	}
-#if 0
-	if(tracer_file == type_of_tracers) {
-		while(read_pcap_packet(new))
-			;
-	}
-#endif
+
+
 	memcpy(new->mac_addr, mac_addr, 6);
 	return new;
 		
@@ -636,6 +632,7 @@ static int run_tracer(const char *named_pipe,  const char *interface, const char
 		case 0:
 			break;  // drop through
 		default:
+			fprintf(stderr, "tracer = %d\n", child);
 			return child;
 	}
 
@@ -924,6 +921,7 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	this_element->egress = egress;
 
 	this_element->number = ++tracer->packets_read;
+	test_inner_filter(this_element);
 	++tracer->unmatched;
 	if(verbose > 0) 
 		fprintf(stderr, "%d: %s: %f  packet %s, direction %s\n",  this_element->number, tracer->interface,
@@ -1448,6 +1446,7 @@ static void setup_realtime_wireshark(void)
 	int pipefd[2];
 	int result;
 	char *program = "wireshark-gtk";
+	pid_t pid;
 
 	setup_mismatched_file();
 	result = pipe(pipefd);
@@ -1456,7 +1455,9 @@ static void setup_realtime_wireshark(void)
 		exit(1);
 	}
 		
-	switch(fork()) {
+
+	pid = fork();
+	switch(pid) {
 		case 0:
 			close(pipefd[1]);
 			close(0);
@@ -1471,6 +1472,7 @@ static void setup_realtime_wireshark(void)
 		default:
 			close(pipefd[0]);
 			realtime_wireshark_fd = pipefd[1];
+			fprintf(stderr, "wireshark pid = %d\n", pid);
 			break;
 	}
 	
@@ -1501,10 +1503,12 @@ static void timeout_a_queue(struct tracers *interface, struct timeval *timeout)
 		timersub(&current_time, &to_test->packet_time, &delta);
 		if(timercmp(&delta, timeout, <))
 			break;
+#if 0
 		if(!to_test->peer) {
 			no_peers++;
 			save_block_to_wireshark(to_test->block);
 		}
+#endif
 
 		queue->head = to_test->next;
 		if(queue->head) {
@@ -1516,9 +1520,8 @@ static void timeout_a_queue(struct tracers *interface, struct timeval *timeout)
 			queue->tail  = NULL;
 		}
 
-		
 		queue->blocks_in_queue--;
-		free_packet_element(to_test);
+		move_to_old_queue(interface, to_test);
 		packets_timedout++;
 		
 	}
@@ -1530,7 +1533,7 @@ static void timeout_a_queue(struct tracers *interface, struct timeval *timeout)
 static void timeout_queues(void)
 {
 	struct timeval timeout = {
-		.tv_sec = 1,
+		.tv_sec = 3,
 		.tv_usec = 0
 	};
 
