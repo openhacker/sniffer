@@ -927,10 +927,73 @@ static void try_to_find_peer(bool is_wan, struct packet_element *packet)
 }
 
 
+static bool interesting_icmp_packet(uint8_t *icmp_packet)
+{
+	return false;
+}
+
+static bool interesting_tcp_packet(uint8_t *tcp_packet)
+{
+	uint16_t src_port;
+	uint16_t dest_port;
+	int i;
+
+	src_port = ntohs(*(uint16_t *) tcp_packet);
+	dest_port = ntohs(*(uint16_t *) (tcp_packet + 2));
+	
+	fprintf(stderr, "tcp: src port = %d, dest port = %d\n", src_port, dest_port);
+	for(i = 0; i < tcp_interesting.num; i++) {
+		if(src_port == tcp_interesting.array[i] || dest_port == tcp_interesting.array[i])
+			return true;
+	}
+	
+	return false;
+}
+
+static bool interesting_udp_packet(uint8_t *udp_packet)
+{
+	return false;
+}
+	
 /* test if packet passes inner filter rules -- if no inner filter, than all packets pass */
 static void test_inner_filter(struct packet_element *this_element)
 {
-	this_element->passed_inner_filter = true;
+	unsigned char *packet;
+	unsigned char *ipv4_packet;
+	uint16_t ethertype;
+	uint8_t protocol_type;
+	int ip_header_size;
+
+	if(!config_file) {
+		/* no config file, all packets interesting */
+		this_element->passed_inner_filter = true;
+		return;
+	}
+
+	this_element->passed_inner_filter = false;	/* start off false */
+	packet = this_element->block->packet;	
+	ethertype = ntohs(* (uint16_t *) (packet + 12));
+
+	if(ethertype  != 0x800) 
+		return; 	/* ignore non-ipv4 packets */
+	
+	ipv4_packet = packet + 14;	/* start of IP  packet */
+	protocol_type = *(ipv4_packet+  + 9);
+	ip_header_size = *ipv4_packet & 0xf;
+	assert(ip_header_size == 5);
+	ip_header_size *= 4;
+
+	switch(protocol_type) {
+		case 1:	/* icmp packet */
+			this_element->passed_inner_filter = interesting_icmp_packet(ipv4_packet + ip_header_size);
+			break;
+		case 6:	/* tcp packet */
+			this_element->passed_inner_filter = interesting_tcp_packet(ipv4_packet + ip_header_size);
+			fprintf(stderr, "interesting tcp packet returned %d\n", this_element->passed_inner_filter);
+			break;
+		case 17: /* udp packet */
+			break;
+	}			
 }
 
 /* look to see if this packet has a peer -- if not, write out to wireshark the prepend queue (emptying queue)

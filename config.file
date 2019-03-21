@@ -1,6 +1,6 @@
 # rudimentary parser currently used
 # if first character is a '#', its a comment
 # no spaces, check the following
-tcp=80,511,22,53
+tcp=80,511,22,53,5000
 udp=53
 
