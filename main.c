@@ -30,6 +30,8 @@ static bool show_consec_packets = false;
 static int max_queue_elements = 100;
 
 static bool save_mismatches = false;
+static bool run_gui = false;
+static pid_t gui_pid;
 
 static int prepend_queue = 10;
 
@@ -60,6 +62,15 @@ struct consec_stats {
 	int num_packets;
 	int max_burst;
 };
+
+struct inside_filter_array {
+	uint16_t *array;
+	int      num;
+};
+
+static struct inside_filter_array tcp_interesting;
+static struct inside_filter_array udp_interesting;
+static struct inside_filter_array icmp_interesting;
 
 
 /* first one is 0, second is 1 */
@@ -295,11 +306,98 @@ static bool compare_tcp_packet(unsigned char *lan_tcp, unsigned char *wan_tcp, i
 	
 }
 
+enum type_of_line { LINE_TCP, LINE_UDP, LINE_ICMP };
+
+
+
+static void add_interesting_port(struct inside_filter_array *interesting, unsigned short num)
+{
+	
+	interesting->array = realloc(interesting->array, (interesting->num + 1) * sizeof(uint16_t));
+	interesting->array[interesting->num] = num;
+	interesting->num++;
+}
+
+static void add_port_number(enum type_of_line type_of_line, unsigned short num)
+{
+	printf("type of line = %d, num = %d\n", type_of_line, num);
+	switch(type_of_line) {
+		case LINE_TCP:
+			add_interesting_port(&tcp_interesting, num);
+			break;
+		case LINE_UDP:
+			add_interesting_port(&udp_interesting, num);
+			break;
+		case LINE_ICMP:
+			add_interesting_port(&icmp_interesting, num);
+			break;
+	}
+}
+
+static void parse_config_line(enum type_of_line type_of_line, char *rest_of_line)
+{
+	while(rest_of_line) {
+		int num;
+		char *end;
+
+		num = strtol(rest_of_line,  &end, 0);
+		if(end == rest_of_line)
+			return;
+		add_port_number(type_of_line, num);
+		rest_of_line = strchr(end, ',');
+		if(rest_of_line)
+			rest_of_line++;
+		else return;
+	}
+}
+
+
+static void parse_config_file(const char *filename)
+{
+	FILE *fp;
+	char buffer[200];
+
+	fp = fopen(filename, "r");
+	if(!fp) {
+		fprintf(stderr, "cannot open %s\n", filename);
+		exit(EXIT_FAILURE);
+	}
+
+	while(!feof(fp)) {
+		enum type_of_line;
+		fgets(buffer, sizeof buffer, fp);
+		if(*buffer == '#') {
+			continue;
+		}
+		if(!strncmp(buffer, "tcp=", 4)) {
+			parse_config_line(LINE_TCP, strchr(buffer, '=') + 1);
+		} else if(!strncmp(buffer, "udp=", 4)) {
+			parse_config_line(LINE_UDP, strchr(buffer, '=') + 1);
+		} else {
+			fprintf(stderr, "cannot parse %s\n", buffer);
+		}
+	}
+	
+	fclose(fp);
+}
+
 /* packets after  IP header */
 static bool compare_udp_packet(unsigned char *lan, unsigned char *wan, int length)
 {
-	return false;
-	
+	uint16_t payload_length;
+
+	/* compare src port, dest port, length */
+	if(memcmp(lan, wan, 6))
+		return false;
+
+	payload_length = ntohs(*((uint16_t *) lan + 4));
+
+	if(memcmp(lan + 8, wan + 8, payload_length))
+		return false;
+
+	return true;
+
+		
 }
 
 
@@ -319,7 +417,7 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 	bool ttl_same_state; 	/* true if ttl is the same, false if not -- only used for matches */
 
 	mismatch_reason = "unknown";
-
+	
 	if(memcmp(lan_ip_header, wan_ip_header, 8)) {
 		mismatch_reason = "first 8 bytes of IP header";
 		return false;	
@@ -391,6 +489,7 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 		case 17:
 			is_pair = compare_udp_packet(lan_ip_header + ip_header_size, 
 					wan_ip_header + ip_header_size, remaining_length);
+			fprintf(stderr, "compare udp packet: %d\n", is_pair);
 			break;
 		default:
 			fprintf(stderr, "unknown protocol type = %d\n", protocol_type);
@@ -422,6 +521,9 @@ static bool compare_packets(struct packet_element *lan_element, struct packet_el
 #endif
 
 	if(lan_element->egress == false && wan_element->egress == true) {
+		/* it seems the timestamp may not be accurate on close packets -- sometimes I see the incoming packet
+                 * coming AFTER the outgoing packet through the router
+                 */
 #ifdef TEST_TIMES
 		/* packet from lan to wan */
 		if(timercmp(&lan_element->packet_time, &wan_element->packet_time, >)) {
@@ -522,6 +624,15 @@ static void reap_children(void)
 				fprintf(stderr, "waitpid had error: %s\n", strerror(errno));
 				return;
 			default:
+				if(gui_pid == pid) {
+					if(true == save_mismatches) {
+						fprintf(stderr, "gui died, ignoring\n");
+						run_gui = false;
+						close(realtime_wireshark_fd);
+						continue;
+					}
+				}
+						
 				if(false == sig_intr_caught) {
 					fprintf(stderr, "child died %d\n", pid);
 					exit(1);
@@ -637,6 +748,7 @@ static int run_tracer(const char *named_pipe,  const char *interface, const char
 	}
 
        // see https://stackoverflow.com/questions/284325/how-to-make-child-process-die-after-parent-exits/17589555#17589555
+	// not sure why this isn't working
 	prctl(PR_SET_PDEATHSIG, SIGTERM);       // linux only, didn't know about it
 
 	close_and_repopen(1, interface);
@@ -833,7 +945,12 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 	
 		queue = &this_tracer->old_queue;
 
+		if(queue->blocks_in_queue > 0) {
+			fprintf(stderr, "old queue has %d\n", queue->blocks_in_queue);
+			assert(queue->head && queue->tail);
+		}
 		to_remove = queue->head;
+
 //		for(to_remove = queue->head; to_remove; to_remove = this_tracer->old_queue->head) {
 		while(to_remove) {
 			save_block_to_wireshark(to_remove->block);
@@ -1270,7 +1387,7 @@ static void create_temp_dir(void)
 
 static void usage(void) 
 {
-	printf("chox [-s] [-m] [-q prepend queue] [-c file]  -l lan -w wan [-f filter] [-v] [-b num] [-t] [-d capture]\n");
+	printf("chox [-s] [-m] [-g] [-q prepend queue] [-c file]  -l lan -w wan [-f filter] [-v] [-b num] [-t] [-d capture]\n");
 	printf("-s -- save pcaps\n");
 	printf("-l -- specify lan (downstream) tap\n");
 	printf("-w -- specify wan (upstream) tap\n");
@@ -1282,6 +1399,7 @@ static void usage(void)
 	printf("-d <capture program> (default %s)\n", capture_program);
 	printf("-c <config file> -- specify config file\n");
 	printf("-q <prepend number> -- packets in front of anomoly (default = %d)\n", prepend_queue);	
+	printf("-g\trun realtime GUI\n"); 
 	printf("\ttaps are expressed \"interface_name:<mac addr>\"\n");
 	exit(1);
 	
@@ -1360,11 +1478,12 @@ static void match_packets(void)
 	for(lan_element = lan->packet_queue.head; lan_element; lan_element = lan_element->next) {
 		struct packet_element *wan_element;
 
-		if(lan_element->peer)
+		if(lan_element->peer || false == lan_element->passed_inner_filter)
 			continue;
+
 		for(wan_element = wan->packet_queue.head; wan_element; wan_element = wan_element->next) {
 			bool result;
-			if(wan_element->peer)
+			if(wan_element->peer || false == wan_element->passed_inner_filter)
 				continue;
 			
 			result = compare_packets(lan_element, wan_element);
@@ -1427,8 +1546,12 @@ static void terminate(void)
 		display_packet_list("wan", wan);
 	}
 	statistics();
-	if(mismatched_packet_fd >= 0 && 0 == no_peers)
+	if(mismatched_packet_fd >= 0 && 0 == no_peers) {
+		fprintf(stderr, "no mismatched packets\n");
 		unlink(mismatched_name);
+	}
+	kill(wan->pid, SIGTERM);
+	kill(lan->pid, SIGTERM);
 	exit(0);
 }
 
@@ -1452,9 +1575,12 @@ static void setup_realtime_wireshark(void)
 	int pipefd[2];
 	int result;
 	char *program = "wireshark-gtk";
-	pid_t pid;
 
 	setup_mismatched_file();
+
+	if(false == run_gui)
+		return;		/* TODO: refactor this */
+
 	result = pipe(pipefd);
 	if(result < 0) {
 		fprintf(stderr, "pipe failed: %s\n", strerror(errno));
@@ -1462,8 +1588,8 @@ static void setup_realtime_wireshark(void)
 	}
 		
 
-	pid = fork();
-	switch(pid) {
+	gui_pid = fork();
+	switch(gui_pid) {
 		case 0:
 			close(pipefd[1]);
 			close(0);
@@ -1478,7 +1604,7 @@ static void setup_realtime_wireshark(void)
 		default:
 			close(pipefd[0]);
 			realtime_wireshark_fd = pipefd[1];
-			fprintf(stderr, "wireshark pid = %d\n", pid);
+			fprintf(stderr, "wireshark pid = %d\n", gui_pid);
 			break;
 	}
 	
@@ -1569,12 +1695,15 @@ int main(int argc, char *argv[])
 		int c;
 		bool result;
 
-		c = getopt(argc, argv, "c:q:d:pb:vsf:w:l:tm");
+		c = getopt(argc, argv, "c:gq:d:pb:vsf:w:l:tm");
 		if(-1 == c)
 			break;
 		switch(c) {
 			case 'd':
 				capture_program = strdup(optarg);
+				break;
+			case 'g':
+				run_gui = true;
 				break;
 			case 'm':
 				save_mismatches = true;
@@ -1626,6 +1755,13 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	if(false == run_gui && false == save_mismatches) {
+		fprintf(stderr, "need to specify at least one -- save mismatches or run realtime gui\n\n");
+		usage();
+	}
+
+	if(config_file)
+		parse_config_file(config_file);
 
 	wan =  do_tracer(true, wan_interface, wan_mac, filter);
 	lan = do_tracer(false, lan_interface, lan_mac, filter);
