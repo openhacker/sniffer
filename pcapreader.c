@@ -475,19 +475,82 @@ struct block_info *read_pcap_block(int fd)
 	return block;
 }
 
-void save_block(int fd, struct block_info *this)
+
+struct option_block {
+	void *data;
+	int size;
+};
+
+static void free_ascii_option(struct option_block *ascii_option)
+{
+	free(ascii_option->data);
+	free(ascii_option);
+}
+#if 0
+static const uint32_t zero = 0;
+static struct option_block end_of_opt = {
+		.data = &zero,
+		.size = sizeof zero
+};
+
+#endif
+
+static int round_to_dword(int n)
+{
+	return (n + 3)   & ~0x3;
+}
+
+
+static struct option_block *construct_ascii_option(enum opt_name option, const char *string)
+{
+	struct option_block *new_block;
+	int length;
+	int rounded_length;
+
+	new_block = malloc(sizeof *new_block);
+	length = strlen(string);
+	rounded_length = round_to_dword(length);
+	new_block->data = malloc(rounded_length + 4);
+	new_block->size = rounded_length + 4;
+	*(unsigned short *) new_block->data = option;
+	*(unsigned short *) (new_block->data + 2) = length;
+	memcpy(new_block->data + 4, string, length);
+
+	return new_block;
+}
+
+
+
+/* add the comment if not null */
+void save_block(int fd, struct block_info *this, const char *comment)
 {
 	int result;
+	uint32_t length;
+
+	length = this->block_length;
+	struct option_block *comment_option = NULL;
 
 	result = write(fd, &this->type, sizeof this->type);
 	assert(result == sizeof this->type);
-	result = write(fd, &this->block_length, sizeof this->block_length);
-	assert(result == sizeof this->block_length);
+	if(comment) {
+		comment_option = construct_ascii_option(opt_comment, comment);
+		length += comment_option->size + 4;
+	}
+	result = write(fd, &length, sizeof length);
+	assert(result == sizeof length);
 	result = write(fd, this->block_body, this->body_length);
 	assert(result == this->body_length);
+	if(comment_option) {
+		uint32_t end_of_comment = 0;
+		result = write(fd, comment_option->data, comment_option->size);
+		assert(result == comment_option->size);
+		result = write(fd, &end_of_comment, sizeof end_of_comment);
+		free_ascii_option(comment_option);	
+	}
+	
 
-	result = write(fd, &this->block_length, sizeof this->block_length);
-	assert(result == sizeof this->block_length);
+	result = write(fd, &length, sizeof length);
+	assert(result == sizeof length);
 }
 
 

@@ -81,7 +81,7 @@ struct block_info {
 struct block_info *read_pcap_block(int fd);
 void print_block(struct block_info *this);
 void free_block(struct block_info *this);
-void save_block(int fd, struct block_info *this);
+void save_block(int fd, struct block_info *this, const char *comment);
 void print_enhanced_packet_block(struct block_info *pblock);
 struct pcap_option_element *decode_header_options(struct block_info *this);
 struct pcap_option_element *decode_interface_options(struct block_info *this);

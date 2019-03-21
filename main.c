@@ -138,12 +138,12 @@ static void catch_intr(int signo)
 	sig_intr_caught = true;
 }
 
-static void save_block_to_wireshark(struct block_info *block)
+static void save_block_to_wireshark(struct block_info *block, const char *comment)
 {
 	if(realtime_wireshark_fd >= 0) 
-		save_block(realtime_wireshark_fd, block);
+		save_block(realtime_wireshark_fd, block, comment);
 	if(mismatched_packet_fd >= 0) 
-		save_block(mismatched_packet_fd, block);
+		save_block(mismatched_packet_fd, block, comment);
 }
 
 static void print_tracer_packets(struct tracers *this)
@@ -466,7 +466,7 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 			return false;
 		}
 	}
-	assert(ip_header_size == 5); 
+
 	ip_header_size *= 4;	/* convert to bytes from words */
 	total_length = ntohs(*(uint16_t *) (lan_ip_header + 2));
 	remaining_length = total_length - ip_header_size;
@@ -575,8 +575,6 @@ static bool compare_packets(struct packet_element *lan_element, struct packet_el
 	return packet_pair;
 }
 
-
-
 static void remove_tracer(pid_t pid)
 {
 	struct tracers *this;
@@ -612,6 +610,7 @@ static void remove_tracer(pid_t pid)
 
 static void reap_children(void)
 {
+	sig_child_caught = false;
 	while(1) {
 		pid_t pid;
 		int status;
@@ -980,7 +979,6 @@ static void test_inner_filter(struct packet_element *this_element)
 	ipv4_packet = packet + 14;	/* start of IP  packet */
 	protocol_type = *(ipv4_packet+  + 9);
 	ip_header_size = *ipv4_packet & 0xf;
-	assert(ip_header_size == 5);
 	ip_header_size *= 4;
 
 	switch(protocol_type) {
@@ -1016,7 +1014,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 
 //		for(to_remove = queue->head; to_remove; to_remove = this_tracer->old_queue->head) {
 		while(to_remove) {
-			save_block_to_wireshark(to_remove->block);
+			save_block_to_wireshark(to_remove->block, NULL);
 			queue->head = to_remove->next;
 			queue->blocks_in_queue--;	
 
@@ -1033,7 +1031,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 			to_remove = queue->head;
 			
 		}
-		save_block_to_wireshark(this_element->block);
+		save_block_to_wireshark(this_element->block, NULL);
 		free_packet_element(this_element);
 	} else {
 		/* add the element to the old_queue, maybe freeing the head element if too big */
@@ -1321,7 +1319,7 @@ static bool read_pcap_packet(struct tracers *this)
 #endif
 
 	if(this->save_fd >= 0) 
-		save_block(this->save_fd, block);
+		save_block(this->save_fd, block, NULL);
 
 	switch(block->type) {
 		case enhanced_packet_block:
@@ -1335,7 +1333,7 @@ static bool read_pcap_packet(struct tracers *this)
 			this->section_header = block;
 			if(false == seen_section_header) {
 				seen_section_header = true;
-				save_block_to_wireshark(block);
+				save_block_to_wireshark(block, NULL);
 			}
 			return true;
 		case interface_description:
@@ -1345,7 +1343,7 @@ static bool read_pcap_packet(struct tracers *this)
 			figure_out_clock_divisor(this);
 			this->interface_description = block;
 			this->interface_id = ++interface_id_seen;
-			save_block_to_wireshark(block);
+			save_block_to_wireshark(block, NULL);
 			break;
 		default:
 			fprintf(stderr, "unknown block type  = 0x%x\n", block->type);
