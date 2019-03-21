@@ -940,7 +940,9 @@ static bool interesting_tcp_packet(uint8_t *tcp_packet)
 	src_port = ntohs(*(uint16_t *) tcp_packet);
 	dest_port = ntohs(*(uint16_t *) (tcp_packet + 2));
 	
+#if 0
 	fprintf(stderr, "tcp: src port = %d, dest port = %d\n", src_port, dest_port);
+#endif
 	for(i = 0; i < tcp_interesting.num; i++) {
 		if(src_port == tcp_interesting.array[i] || dest_port == tcp_interesting.array[i])
 			return true;
@@ -951,6 +953,18 @@ static bool interesting_tcp_packet(uint8_t *tcp_packet)
 
 static bool interesting_udp_packet(uint8_t *udp_packet)
 {
+	uint16_t src_port;
+	uint16_t dest_port;
+	int i;
+
+	src_port = ntohs(*(uint16_t *) udp_packet);
+	dest_port = ntohs(*(uint16_t *) (udp_packet + 2));
+	
+	for(i = 0; i < udp_interesting.num; i++) {
+		if(src_port == udp_interesting.array[i] || dest_port == udp_interesting.array[i])
+			return true;
+	}
+			 
 	return false;
 }
 	
@@ -999,6 +1013,10 @@ static void test_inner_filter(struct packet_element *this_element)
  */
 static void move_to_old_queue(struct tracers *this_tracer, struct packet_element *this_element)
 {
+	char comment[128];
+
+	sprintf(comment, "%s: prequeue", identify_tracer(this_tracer));
+	
 	if(true == this_element->passed_inner_filter && !this_element->peer) {
 		/* save prequeue and this element to wireshark */
 		struct packet_element *to_remove;
@@ -1014,7 +1032,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 
 //		for(to_remove = queue->head; to_remove; to_remove = this_tracer->old_queue->head) {
 		while(to_remove) {
-			save_block_to_wireshark(to_remove->block, NULL);
+			save_block_to_wireshark(to_remove->block, comment);
 			queue->head = to_remove->next;
 			queue->blocks_in_queue--;	
 
@@ -1031,7 +1049,8 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 			to_remove = queue->head;
 			
 		}
-		save_block_to_wireshark(this_element->block, NULL);
+		save_block_to_wireshark(this_element->block, "trigger");
+		no_peers++;
 		free_packet_element(this_element);
 	} else {
 		/* add the element to the old_queue, maybe freeing the head element if too big */
