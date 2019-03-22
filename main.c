@@ -1001,7 +1001,9 @@ static void test_inner_filter(struct packet_element *this_element)
 			break;
 		case 6:	/* tcp packet */
 			this_element->passed_inner_filter = interesting_tcp_packet(ipv4_packet + ip_header_size);
+#if 0
 			fprintf(stderr, "interesting tcp packet returned %d\n", this_element->passed_inner_filter);
+#endif
 			break;
 		case 17: /* udp packet */
 			break;
@@ -1014,6 +1016,7 @@ static void test_inner_filter(struct packet_element *this_element)
 static void move_to_old_queue(struct tracers *this_tracer, struct packet_element *this_element)
 {
 	char comment[128];
+	static int trigger = 0;
 
 	sprintf(comment, "%s: prequeue", identify_tracer(this_tracer));
 	
@@ -1049,6 +1052,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 			to_remove = queue->head;
 			
 		}
+		fprintf(stderr, "%d: trigger packet\n", trigger++);
 		save_block_to_wireshark(this_element->block, "trigger");
 		no_peers++;
 		free_packet_element(this_element);
@@ -1190,18 +1194,7 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 			this_queue->tail = NULL;
 		}
 		this_queue->blocks_in_queue--;
-#if 0
-		if(!to_remove->peer) {
-			if(verbose)
-				fprintf(stderr, "No peer for %s: #%d\n", 
-					tracer->wan == true ? "wan" : "lan", to_remove->number);
-			save_block_to_wireshark(to_remove->block);
-		}
-#endif
 		move_to_old_queue(tracer, to_remove);
-#if 0
-		free_packet_element(to_remove);
-#endif
 	}
 	
 	try_to_find_peer(tracer->wan, this_element);
