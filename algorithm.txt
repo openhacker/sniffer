@@ -1,0 +1,17 @@
+In order for a packet to be seen, it must pass the kernel filter.
+
+When the packet is read by chox, its put at the tail of the running queue.
+As the packets are read in, they are evaluated to see if there are "interesting"
+packets.   Interesting packets much have a peer.
+
+Packets are moved from the running queue to the pre-queue when:
+   a) the running queue fills up
+   b) a timeout occurs
+When packets are moved from the running queue to the pre-queue, 
+they are evaluated to see:
+   a) are they interesting (passes the inner filter test)
+   b) do they have a peer
+
+If they are interesting and DON'T have a peer, this is a trigger event, in which case the prequeue
+packets are written out along with the trigger.
+
