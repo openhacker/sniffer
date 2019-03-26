@@ -958,6 +958,7 @@ static bool interesting_udp_packet(uint8_t *udp_packet)
 	uint16_t dest_port;
 	int i;
 
+	fprintf(stderr, "%s\n", __func__);
 	src_port = ntohs(*(uint16_t *) udp_packet);
 	dest_port = ntohs(*(uint16_t *) (udp_packet + 2));
 	
@@ -1007,6 +1008,9 @@ static void test_inner_filter(struct packet_element *this_element)
 #endif
 			break;
 		case 17: /* udp packet */
+			this_element->passed_inner_filter = interesting_udp_packet(ipv4_packet + ip_header_size);
+			break;
+		default:
 			break;
 	}			
 }
