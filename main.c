@@ -37,6 +37,9 @@ static int prepend_queue = 10;
 
 static struct timeval first_packet;
 
+static char *lan_filter = "";
+static char *wan_filter = "";
+
 /* for debugging */
 static char *mismatch_reason;
 
@@ -396,8 +399,6 @@ static bool compare_udp_packet(unsigned char *lan, unsigned char *wan, int lengt
 		return false;
 
 	return true;
-
-		
 }
 
 
@@ -1755,7 +1756,7 @@ static void timeout_queues(void)
 
 int main(int argc, char *argv[])
 {
-	char *filter = "icmp";
+	char *filter = NULL;
 	create_temp_dir();
 	
 
@@ -1836,8 +1837,8 @@ int main(int argc, char *argv[])
 	if(config_file)
 		parse_config_file(config_file);
 
-	wan =  do_tracer(true, wan_interface, wan_mac, filter);
-	lan = do_tracer(false, lan_interface, lan_mac, filter);
+	wan =  do_tracer(true, wan_interface, wan_mac, wan_filter);
+	lan = do_tracer(false, lan_interface, lan_mac, lan_filter);
 
 	if(!lan || !wan) {
 		fprintf(stderr, "Haven't selected wan or lan\n");
