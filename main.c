@@ -970,6 +970,102 @@ static bool interesting_udp_packet(uint8_t *udp_packet)
 	return false;
 }
 	
+/* remove elements before tv, return elements remaining in queue */
+static int advance_queue(struct packet_queue *queue, struct timeval *tv)
+{
+	int removed  = 0;
+
+	while(queue->blocks_in_queue > 0) {
+		struct packet_element *to_remove;
+
+		to_remove = queue->head;
+
+		if(timercmp(&to_remove->packet_time, tv, >))
+			break;
+		queue->head = to_remove->next;
+		if(queue->head) {
+			queue->head->prev = NULL;
+			assert(queue->blocks_in_queue > 1);
+		}
+		queue->blocks_in_queue--;
+		free_packet_element(to_remove);
+		removed++;
+
+		if(!queue->blocks_in_queue) {
+			queue->head = NULL;
+			queue->tail = NULL;
+		}
+	}
+	if(removed > 0) 
+		fprintf(stderr, "removed %d elements\n", removed);
+
+	return queue->blocks_in_queue;
+}
+
+static int wireshark_emit_queue(const char *comment, struct packet_queue *queue, struct timeval *tv)
+{
+	int removed  = 0;
+
+	while(queue->blocks_in_queue > 0) {
+		struct packet_element *to_remove;
+
+		to_remove = queue->head;
+
+		if(timercmp(&to_remove->packet_time, tv, >))
+			break;
+		queue->head = to_remove->next;
+		if(queue->head) {
+			queue->head->prev = NULL;
+			assert(queue->blocks_in_queue > 1);
+		}
+		queue->blocks_in_queue--;
+		save_block_to_wireshark(to_remove->block, comment);
+		
+		free_packet_element(to_remove);
+		removed++;
+
+		if(!queue->blocks_in_queue) {
+			queue->head = NULL;
+			queue->tail = NULL;
+		}
+	}
+	if(removed > 0) 
+		fprintf(stderr, "wrote to wireshark %d elements\n", removed);
+
+	return queue->blocks_in_queue;
+
+
+}
+
+static void wireshark_emit_until(struct tracers *tracer, struct timeval *till_time)
+{
+	char *type_tracer;
+	char comment[128];
+	int remaining;
+	
+	type_tracer = identify_tracer(tracer);
+	sprintf(comment, "other queue %s prequeue", type_tracer);
+	remaining = wireshark_emit_queue(comment, &tracer->old_queue, till_time);
+	if(!remaining) {
+		sprintf(comment, "other queue %s main queue", type_tracer);
+		wireshark_emit_queue(comment, &tracer->packet_queue, till_time);
+	}	
+	
+	
+	
+}
+	
+static void advance_other_tracer(struct tracers *tracer, struct timeval *till_time)
+{
+	int remaining;
+	
+
+	remaining = advance_queue(&tracer->old_queue, till_time);
+	if(!remaining) {
+		advance_queue(&tracer->packet_queue, till_time);
+	}
+}
+
 /* test if packet passes inner filter rules -- if no inner filter, than all packets pass */
 static void test_inner_filter(struct packet_element *this_element)
 {
@@ -1023,12 +1119,23 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 	char comment[128];
 	static int trigger = 0;
 
-	sprintf(comment, "%s: prequeue", identify_tracer(this_tracer));
 	
 	if(true == this_element->passed_inner_filter && !this_element->peer) {
+		char my_comment[128];
+		char other_comment[128];
+		struct tracers *other_tracer;
+
+		if(this_tracer == wan)
+			other_tracer = lan;
+		else	other_tracer = wan;
+		
+
 		/* save prequeue and this element to wireshark */
 		struct packet_element *to_remove;
 		struct packet_queue *queue;
+
+		sprintf(my_comment, "%s: prequeue", identify_tracer(this_tracer));
+		sprintf(other_comment, "%s: prequeue", identify_tracer(other_tracer));
 	
 		queue = &this_tracer->old_queue;
 
@@ -1038,8 +1145,12 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		}
 		to_remove = queue->head;
 
-//		for(to_remove = queue->head; to_remove; to_remove = this_tracer->old_queue->head) {
+		if(to_remove)
+			advance_other_tracer(other_tracer, &to_remove->packet_time);
+
 		while(to_remove) {
+			wireshark_emit_until(other_tracer, &to_remove->packet_time);
+
 			save_block_to_wireshark(to_remove->block, comment);
 			queue->head = to_remove->next;
 			queue->blocks_in_queue--;	
@@ -1711,21 +1822,8 @@ static void timeout_a_queue(struct tracers *interface, struct timeval *timeout)
 
 		to_test = queue->head;
 		timersub(&current_time, &to_test->packet_time, &delta);
-#if 0
-		fprintf(stderr, "current time = %ld.%06ld, totest = %ld.%06ld, delta = %ld.%06ld, timeout = %ld.%06ld\n",
-				current_time.tv_sec, current_time.tv_usec,
-					to_test->packet_time.tv_sec, to_test->packet_time.tv_usec,
-					delta.tv_sec, delta.tv_usec,
-					timeout->tv_sec, timeout->tv_usec);
-#endif
 		if(timercmp(&delta, timeout, <))
 			break;
-#if 0
-		if(!to_test->peer) {
-			no_peers++;
-			save_block_to_wireshark(to_test->block);
-		}
-#endif
 
 		queue->head = to_test->next;
 		if(queue->head) {
