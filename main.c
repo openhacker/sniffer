@@ -323,7 +323,7 @@ static void add_interesting_port(struct inside_filter_array *interesting, unsign
 
 static void add_port_number(enum type_of_line type_of_line, unsigned short num)
 {
-	printf("type of line = %d, num = %d\n", type_of_line, num);
+//	printf("type of line = %d, num = %d\n", type_of_line, num);
 	switch(type_of_line) {
 		case LINE_TCP:
 			add_interesting_port(&tcp_interesting, num);
@@ -753,7 +753,7 @@ static int run_tracer(const char *named_pipe,  const char *interface, const char
 		case 0:
 			break;  // drop through
 		default:
-			fprintf(stderr, "tracer = %d\n", child);
+//			fprintf(stderr, "tracer = %d\n", child);
 			return child;
 	}
 
@@ -818,7 +818,7 @@ static struct tracers *do_tracer(bool wan, const char *interface, unsigned char 
 	} else {
 		assert(tracer_file != type_of_tracers);
 		type_of_tracers = tracer_tshark;
-		fprintf(stderr, "capturing %s %s:%s\n", type_of_stream, interface, stringize_mac_addr(mac_addr));
+//		fprintf(stderr, "capturing %s %s:%s\n", type_of_stream, interface, stringize_mac_addr(mac_addr));
 
 		sprintf(named_pipe, "%s/%d", temp_dir,  num++);
 		result = mknod(named_pipe, S_IFIFO | 0666, 0);
@@ -1048,7 +1048,7 @@ static int wireshark_emit_queue(const char *comment, struct packet_queue *queue,
 
 static void wireshark_emit_until(struct tracers *tracer, struct timeval *till_time)
 {
-	char *type_tracer;
+	const char *type_tracer;
 	char comment[128];
 	int remaining;
 	
@@ -1125,9 +1125,8 @@ static void test_inner_filter(struct packet_element *this_element)
  */
 static void move_to_old_queue(struct tracers *this_tracer, struct packet_element *this_element)
 {
-	char comment[128];
 	static int trigger = 0;
-
+	char trigger_comment[128];
 	
 	if(true == this_element->passed_inner_filter && !this_element->peer) {
 		char my_comment[128];
@@ -1160,7 +1159,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		while(to_remove) {
 			wireshark_emit_until(other_tracer, &to_remove->packet_time);
 
-			save_block_to_wireshark(to_remove->block, comment);
+			save_block_to_wireshark(to_remove->block, my_comment);
 			queue->head = to_remove->next;
 			queue->blocks_in_queue--;	
 
@@ -1177,8 +1176,10 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 			to_remove = queue->head;
 			
 		}
-		fprintf(stderr, "%d: trigger packet\n", trigger++);
-		save_block_to_wireshark(this_element->block, "trigger");
+		fprintf(stderr, "%d: trigger packet\n", trigger);
+		sprintf(trigger_comment, "trigger #%d", trigger);
+		trigger++;
+		save_block_to_wireshark(this_element->block, trigger_comment);
 		no_peers++;
 		free_packet_element(this_element);
 	} else {
