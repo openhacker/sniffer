@@ -2,7 +2,7 @@
 
 
 # use filter= to change the default filter 
-filter=${filter:-tcp}
+# filter=${filter:-tcp}
 
 
 lan_name=chox-lan
@@ -18,5 +18,5 @@ then
 	 valgrind --leak-check=full --show-leak-kinds=all -v  --log-file=valgrind.$$.log \
 			./chox  -s    -f "$filter" -l chox-lan:e0:91:f5:6a:78:de -w chox-wan:e0:91:f5:6a:78:df
 else
-	 ./chox  -m -c config.file  -b 500   -l $lan_name:$lan_mac -w $wan_name:$wan_mac
+	 ./chox  -m -c config.file  -b 500 -q 50   -l $lan_name:$lan_mac -w $wan_name:$wan_mac
 fi
