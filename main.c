@@ -359,6 +359,8 @@ static void parse_config_file(const char *filename)
 {
 	FILE *fp;
 	char buffer[200];
+	const char lan_token[] = "lan_filter=";
+	const char wan_token[] = "wan_filter=";
 
 	fp = fopen(filename, "r");
 	if(!fp) {
@@ -376,6 +378,14 @@ static void parse_config_file(const char *filename)
 			parse_config_line(LINE_TCP, strchr(buffer, '=') + 1);
 		} else if(!strncmp(buffer, "udp=", 4)) {
 			parse_config_line(LINE_UDP, strchr(buffer, '=') + 1);
+		} else if(!strncmp(buffer, lan_token, sizeof(lan_token) - 1)) {
+			char *cp = strchr(buffer, '=') + 1;
+
+			lan_filter = strdup(cp);
+		} else if(!strncmp(buffer, wan_token, sizeof(wan_token) - 1)) {
+			char *cp = strchr(buffer, '=') + 1;
+		
+			wan_filter = strdup(cp);
 		} else {
 			fprintf(stderr, "cannot parse %s\n", buffer);
 		}
@@ -958,7 +968,6 @@ static bool interesting_udp_packet(uint8_t *udp_packet)
 	uint16_t dest_port;
 	int i;
 
-	fprintf(stderr, "%s\n", __func__);
 	src_port = ntohs(*(uint16_t *) udp_packet);
 	dest_port = ntohs(*(uint16_t *) (udp_packet + 2));
 	
@@ -1807,7 +1816,8 @@ static void load_interface(struct tracers *this)
 }
 
 
-static void timeout_a_queue(struct tracers *interface, struct timeval *timeout)
+/* return how many packets were timed out */
+static int timeout_a_queue(struct tracers *interface, struct timeval *timeout)
 {
 	struct packet_queue *queue;
 	struct timeval current_time;
@@ -1840,20 +1850,31 @@ static void timeout_a_queue(struct tracers *interface, struct timeval *timeout)
 		packets_timedout++;
 		
 	}
+#if 0
 	if(packets_timedout) 
 		fprintf(stderr, "Timed out %d packets in queue %s\n", packets_timedout, 
 					identify_tracer(interface)); 
+#else
+	return packets_timedout;
+#endif
 }
 
 static void timeout_queues(void)
 {
+	int wan_timedout;
+	int lan_timedout;
+
 	struct timeval timeout = {
-		.tv_sec = 3,
+		.tv_sec = 1,
 		.tv_usec = 0
 	};
 
-	timeout_a_queue(wan, &timeout);
-	timeout_a_queue(lan, &timeout);
+	wan_timedout = timeout_a_queue(wan, &timeout);
+	lan_timedout = timeout_a_queue(lan, &timeout);
+
+	if(wan_timedout || lan_timedout) {
+		fprintf(stderr, "lan timedout = %d, wan timedout = %d\n", lan_timedout, wan_timedout);
+	}
 }
 
 int main(int argc, char *argv[])
