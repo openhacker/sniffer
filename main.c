@@ -1129,6 +1129,8 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 	char trigger_comment[128];
 	
 	if(true == this_element->passed_inner_filter && !this_element->peer) {
+		struct timeval limit_time;
+		struct timeval delta_limit = { 0, 100 * 1000 }; 	// 100 msec
 		char my_comment[128];
 		char other_comment[128];
 		struct tracers *other_tracer;
@@ -1181,7 +1183,32 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		trigger++;
 		save_block_to_wireshark(this_element->block, trigger_comment);
 		no_peers++;
+		timeradd(&this_element->packet_time, &delta_limit, &limit_time);
 		free_packet_element(this_element);
+
+		sprintf(my_comment, "%s: postqueue", identify_tracer(this_tracer));
+		sprintf(other_comment, "%s: postqueue", identify_tracer(other_tracer));
+
+		to_remove = queue->head;
+		while(to_remove && timercmp(&to_remove->packet_time, &limit_time, <)) {
+			wireshark_emit_until(other_tracer, &to_remove->packet_time);
+
+			save_block_to_wireshark(to_remove->block, my_comment);
+			queue->head = to_remove->next;
+			queue->blocks_in_queue--;	
+
+			free_packet_element(to_remove);
+
+			if(queue->head) {
+				queue->head->prev = NULL;
+				assert(queue->blocks_in_queue > 0);
+			} else {
+				queue->head = NULL;
+				queue->tail = NULL;
+				assert(queue->blocks_in_queue == 0);
+			}
+			to_remove = queue->head;
+		}
 	} else {
 		/* add the element to the old_queue, maybe freeing the head element if too big */
 		struct packet_queue *queue;
