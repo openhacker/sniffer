@@ -1189,6 +1189,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		sprintf(my_comment, "%s: postqueue", identify_tracer(this_tracer));
 		sprintf(other_comment, "%s: postqueue", identify_tracer(other_tracer));
 
+		queue = &this_tracer->packet_queue;
 		to_remove = queue->head;
 		while(to_remove && timercmp(&to_remove->packet_time, &limit_time, <)) {
 			wireshark_emit_until(other_tracer, &to_remove->packet_time);
@@ -1893,7 +1894,7 @@ static void timeout_queues(void)
 	int lan_timedout;
 
 	struct timeval timeout = {
-		.tv_sec = 1,
+		.tv_sec = 2,
 		.tv_usec = 0
 	};
 
@@ -1901,7 +1902,11 @@ static void timeout_queues(void)
 	lan_timedout = timeout_a_queue(lan, &timeout);
 
 	if(wan_timedout || lan_timedout) {
-		fprintf(stderr, "lan timedout = %d, wan timedout = %d\n", lan_timedout, wan_timedout);
+		struct timeval now;
+
+		gettimeofday(&now, NULL);
+
+		fprintf(stderr, "%ld.%06ld: lan timedout = %d, wan timedout = %d\n", now.tv_sec, now.tv_usec, lan_timedout, wan_timedout);
 	}
 }
 
