@@ -3,6 +3,6 @@
 # no spaces, check the following
 tcp=80,511,22,53,5000
 udp=53,5000
-# icmp=0,8
+icmp=0,8
 lan_filter=not vlan
 wan_filter=ip
