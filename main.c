@@ -355,6 +355,26 @@ static void parse_config_line(enum type_of_line type_of_line, char *rest_of_line
 }
 
 
+/* only accept 0 and 8 (echo/reply) */
+static void validate_icmp_types(void)
+{
+	int i;
+
+	for(i = 0; i < icmp_interesting.num; i++) {
+		switch(icmp_interesting.array[i]) {
+			case 0:
+			case 8:
+				break;
+			default:
+				fprintf(stderr, "Illegal icmp type = %d\n", icmp_interesting.array[i]);
+				exit(1);
+		}
+	}
+
+	
+	
+}
+
 static void parse_config_file(const char *filename)
 {
 	FILE *fp;
@@ -386,6 +406,9 @@ static void parse_config_file(const char *filename)
 			char *cp = strchr(buffer, '=') + 1;
 		
 			wan_filter = strdup(cp);
+		} else if(!strncmp(buffer, "icmp=", 5)) {
+			parse_config_line(LINE_ICMP, strchr(buffer, '=') + 1); 
+			validate_icmp_types();
 		} else {
 			fprintf(stderr, "cannot parse %s\n", buffer);
 		}
