@@ -20,6 +20,7 @@
 
 static bool sig_child_caught = false;
 
+static bool start_triggers = false;
 static bool sig_intr_caught = false;
 
 static char temp_dir[128];
@@ -261,14 +262,13 @@ static bool compare_icmp_packet(unsigned char *lan, unsigned char *wan, int leng
 		case 0:	/* ping request */
 		case 8: /* ping reply */
 			/* only compare identifier -- seems router changes sequence number -- but this isn't speced out */
-			if(*(uint16_t *) (lan + 4) != *(uint16_t *) (wan + 4))
-				return false;
-			else return true;
-#if 0
-			if(!memcmp(lan + 8, wan + 8, length - 8 ))
-				return true;
-			else	return false;
-#endif
+			if(*(uint16_t *) (lan + 4) != *(uint16_t *) (wan + 4)) 
+				break;
+			if(length > 8) {
+				if(memcmp(lan + 8, wan + 8, length - 8))
+					break;
+			}
+			return true;
 		default:
 			fprintf(stderr, "unknown type: %d\n", type);
 			break;
@@ -1170,7 +1170,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 	static int trigger = 0;
 	char trigger_comment[128];
 	
-	if(true == this_element->passed_inner_filter && !this_element->peer) {
+	if(true == this_element->passed_inner_filter && !this_element->peer && true == start_triggers) {
 		struct timeval limit_time;
 		struct timeval delta_limit = { 0, 100 * 1000 }; 	// 100 msec
 		char my_comment[128];
@@ -1955,13 +1955,18 @@ static void timeout_queues(void)
 int main(int argc, char *argv[])
 {
 	char *filter = NULL;
-	create_temp_dir();
-	
-
 	char *wan_interface = NULL;
 	unsigned char wan_mac[6];
 	char *lan_interface = NULL;
 	unsigned char lan_mac[6];
+	struct timeval start_time;
+	struct timeval target_time;	/* start_time + delta */
+	struct timeval delta = { 
+			.tv_sec = 1,
+			.tv_usec = 0
+			};
+	
+	create_temp_dir();
 
 	while(1) {
 		int c;
@@ -2057,7 +2062,20 @@ int main(int argc, char *argv[])
 	signal(SIGUSR1, statistics);
 	signal(SIGINT, catch_intr);
 
+	gettimeofday(&start_time, NULL);
+	timeradd(&start_time, &delta, &target_time);
+	
 	while(wan && lan) {
+		if(false == start_triggers) {
+			struct timeval now;
+	
+			gettimeofday(&now, NULL);
+			if(timercmp(&now, &target_time, >)) {
+				start_triggers = true;
+				fprintf(stderr, "starting triggers\n");
+			}
+		}
+			
 		if(true == sig_child_caught) {
 			printf("caught sig child\n");
 			reap_children();
