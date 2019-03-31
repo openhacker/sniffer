@@ -260,11 +260,15 @@ static bool compare_icmp_packet(unsigned char *lan, unsigned char *wan, int leng
 	switch(type) {
 		case 0:	/* ping request */
 		case 8: /* ping reply */
+			/* only compare identifier -- seems router changes sequence number -- but this isn't speced out */
 			if(*(uint16_t *) (lan + 4) != *(uint16_t *) (wan + 4))
 				return false;
+			else return true;
+#if 0
 			if(!memcmp(lan + 8, wan + 8, length - 8 ))
 				return true;
 			else	return false;
+#endif
 		default:
 			fprintf(stderr, "unknown type: %d\n", type);
 			break;
@@ -332,6 +336,10 @@ static void add_port_number(enum type_of_line type_of_line, unsigned short num)
 			add_interesting_port(&udp_interesting, num);
 			break;
 		case LINE_ICMP:
+			if(num > 255) {
+				fprintf(stderr, "cannot have ICMP number > 255, read %d\n", num);
+				exit(1);
+			}	
 			add_interesting_port(&icmp_interesting, num);
 			break;
 	}
@@ -962,6 +970,13 @@ static void try_to_find_peer(bool is_wan, struct packet_element *packet)
 
 static bool interesting_icmp_packet(uint8_t *icmp_packet)
 {
+	int i;
+
+	for(i = 0; i < icmp_interesting.num; i++) {
+		if(*icmp_packet == icmp_interesting.array[i])
+			return true;
+	}
+	
 	return false;
 }
 
@@ -1061,8 +1076,12 @@ static int wireshark_emit_queue(const char *comment, struct packet_queue *queue,
 			queue->tail = NULL;
 		}
 	}
-	if(removed > 0) 
-		fprintf(stderr, "wrote to wireshark %d elements\n", removed);
+	if(removed > 0) {
+		struct timeval now;
+		
+		gettimeofday(&now, NULL);
+		fprintf(stderr, "%ld:%06ld wrote to wireshark %d elements %s\n", now.tv_sec, now.tv_usec, removed, comment);
+	}
 
 	return queue->blocks_in_queue;
 
