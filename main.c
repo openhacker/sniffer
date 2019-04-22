@@ -434,9 +434,9 @@ static bool compare_udp_packet(unsigned char *lan, unsigned char *wan, int lengt
 	if(memcmp(lan, wan, 6))
 		return false;
 
-	payload_length = ntohs(*((uint16_t *) lan + 4));
+	payload_length = ntohs(*((uint16_t *) (lan + 4)));
 
-	if(memcmp(lan + 8, wan + 8, payload_length))
+	if(memcmp(lan + 8, wan + 8, payload_length - 8))
 		return false;
 
 	return true;
