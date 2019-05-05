@@ -1169,13 +1169,16 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 {
 	static int trigger = 0;
 	char trigger_comment[128];
+
 	
 	if(true == this_element->passed_inner_filter && !this_element->peer && true == start_triggers) {
 		struct timeval limit_time;
 		struct timeval delta_limit = { 0, 100 * 1000 }; 	// 100 msec
-		char my_comment[128];
+		char comment_base[128];
+		char comment[128];
 		char other_comment[128];
 		struct tracers *other_tracer;
+		int trigger_queue_number = 0;    /* starts at -, ends in + at the trigger  */
 
 		if(this_tracer == wan)
 			other_tracer = lan;
@@ -1186,7 +1189,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		struct packet_element *to_remove;
 		struct packet_queue *queue;
 
-		sprintf(my_comment, "%s: prequeue", identify_tracer(this_tracer));
+		sprintf(comment_base, "%s: prequeue", identify_tracer(this_tracer));
 		sprintf(other_comment, "%s: prequeue", identify_tracer(other_tracer));
 	
 		queue = &this_tracer->old_queue;
@@ -1194,6 +1197,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		if(queue->blocks_in_queue > 0) {
 			fprintf(stderr, "old queue has %d\n", queue->blocks_in_queue);
 			assert(queue->head && queue->tail);
+			trigger_queue_number = -queue->blocks_in_queue;
 		}
 		to_remove = queue->head;
 
@@ -1203,7 +1207,9 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		while(to_remove) {
 			wireshark_emit_until(other_tracer, &to_remove->packet_time);
 
-			save_block_to_wireshark(to_remove->block, my_comment);
+			sprintf(comment, "%s: %d", comment_base, trigger_queue_number);
+			trigger_queue_number++;
+			save_block_to_wireshark(to_remove->block, comment);
 			queue->head = to_remove->next;
 			queue->blocks_in_queue--;	
 
@@ -1228,7 +1234,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		timeradd(&this_element->packet_time, &delta_limit, &limit_time);
 		free_packet_element(this_element);
 
-		sprintf(my_comment, "%s: postqueue", identify_tracer(this_tracer));
+		sprintf(comment_base, "%s: postqueue", identify_tracer(this_tracer));
 		sprintf(other_comment, "%s: postqueue", identify_tracer(other_tracer));
 
 		queue = &this_tracer->packet_queue;
@@ -1236,7 +1242,9 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		while(to_remove && timercmp(&to_remove->packet_time, &limit_time, <)) {
 			wireshark_emit_until(other_tracer, &to_remove->packet_time);
 
-			save_block_to_wireshark(to_remove->block, my_comment);
+			sprintf(comment, "%s %d", comment_base, trigger_queue_number);
+			trigger_queue_number++;
+			save_block_to_wireshark(to_remove->block, comment);
 			queue->head = to_remove->next;
 			queue->blocks_in_queue--;	
 
