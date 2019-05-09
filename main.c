@@ -1162,6 +1162,31 @@ static void test_inner_filter(struct packet_element *this_element)
 	}			
 }
 
+/* count and return packets < this_time in this tracer */
+static int count_packets_till_time(struct tracers *tracer, struct timeval this_time)
+{
+	int packets = 0;
+	struct packet_element *this_packet;
+
+	for(this_packet = tracer->old_queue.head; this_packet; this_packet = this_packet->next) {
+		if(timercmp(&this_packet->packet_time,  &this_time, >)) {
+			return packets;
+		}
+		packets++;
+	}
+
+	/* look at main queue */
+	for(this_packet = tracer->packet_queue.head; this_packet; this_packet = this_packet->next) {
+		if(timercmp(&this_packet->packet_time, &this_time, >)) {
+			return packets;
+		}
+		packets++;
+	}
+	
+	/* return sum of both queues */
+	return packets;
+}
+
 /* look to see if this packet has a peer -- if not, write out to wireshark the prepend queue (emptying queue)
  * and this packet
  */
@@ -1179,6 +1204,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		char other_comment[128];
 		struct tracers *other_tracer;
 		int trigger_queue_number = 0;    /* starts at -, ends in + at the trigger  */
+		int packets_in_other_queue;
 
 		if(this_tracer == wan)
 			other_tracer = lan;
@@ -1190,9 +1216,11 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		struct packet_queue *queue;
 
 		sprintf(comment_base, "%s: prequeue", identify_tracer(this_tracer));
-		sprintf(other_comment, "%s: prequeue", identify_tracer(other_tracer));
+		sprintf(other_comment, "%s", identify_tracer(other_tracer));
 	
 		queue = &this_tracer->old_queue;
+		packets_in_other_queue = count_packets_till_time(other_tracer,  this_element->packet_time);
+		fprintf(stderr, "%d packets in other queue\n", packets_in_other_queue);
 
 		if(queue->blocks_in_queue > 0) {
 			fprintf(stderr, "old queue has %d\n", queue->blocks_in_queue);
