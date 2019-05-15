@@ -1244,7 +1244,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 
 		/* figure out how many packets are in other queue */
 		other_queue_base_number = count_packets_till_time(other_tracer,  this_element->packet_time);
-		other_queue_base_number -other_queue_base_number; 	/* make negative */
+		other_queue_base_number = -other_queue_base_number; 	/* make negative */
 
 		while(to_remove) {
 			other_queue_base_number += wireshark_emit_until(other_tracer, &to_remove->packet_time,
