@@ -1049,12 +1049,16 @@ static int advance_queue(struct packet_queue *queue, struct timeval *tv)
 	return queue->blocks_in_queue;
 }
 
-static int wireshark_emit_queue(const char *comment, struct packet_queue *queue, struct timeval *tv)
+static int wireshark_emit_queue_until(struct tracers *tracer, struct packet_queue *queue, struct timeval *tv, int i)
 {
 	int removed  = 0;
+	char base_comment[128];
 
+	
+	sprintf(base_comment, "%s (other)",  identify_tracer(tracer));
 	while(queue->blocks_in_queue > 0) {
 		struct packet_element *to_remove;
+		char comment[128];
 
 		to_remove = queue->head;
 
@@ -1066,6 +1070,8 @@ static int wireshark_emit_queue(const char *comment, struct packet_queue *queue,
 			assert(queue->blocks_in_queue > 1);
 		}
 		queue->blocks_in_queue--;
+		sprintf(comment, "%s %d", base_comment, i);
+		i++;
 		save_block_to_wireshark(to_remove->block, comment);
 		
 		free_packet_element(to_remove);
@@ -1080,30 +1086,38 @@ static int wireshark_emit_queue(const char *comment, struct packet_queue *queue,
 		struct timeval now;
 		
 		gettimeofday(&now, NULL);
-		fprintf(stderr, "%ld:%06ld wrote to wireshark %d elements %s\n", now.tv_sec, now.tv_usec, removed, comment);
+		fprintf(stderr, "%ld:%06ld wrote to wireshark %d elements %s\n", now.tv_sec, now.tv_usec, removed, base_comment);
 	}
 
-	return queue->blocks_in_queue;
+	return removed;
 
 
 }
 
-static void wireshark_emit_until(struct tracers *tracer, struct timeval *till_time)
+
+static int emit_other_queue(struct tracers *tracer, struct packet_queue *queue, struct timeval *until, int i)
 {
-	const char *type_tracer;
-	char comment[128];
-	int remaining;
-	
-	type_tracer = identify_tracer(tracer);
-	sprintf(comment, "other queue %s prequeue", type_tracer);
-	remaining = wireshark_emit_queue(comment, &tracer->old_queue, till_time);
-	if(!remaining) {
-		sprintf(comment, "other queue %s main queue", type_tracer);
-		wireshark_emit_queue(comment, &tracer->packet_queue, till_time);
-	}	
-	
-	
-	
+	int packets_written = 0;
+
+	return packets_written;
+}
+
+static int wireshark_emit_until(struct tracers *tracer, struct timeval *till_time, int i)
+{
+	int packets_written = 0;
+
+	if(tracer->old_queue.blocks_in_queue > 0) {
+		/* have old queue to try to write */
+		packets_written = wireshark_emit_queue_until(tracer, &tracer->old_queue, till_time, i);
+	}
+	if(tracer->old_queue.blocks_in_queue > 0) {
+		/* didn't finish this queue yet */
+		return packets_written;
+	}
+	i += packets_written;   /* new index */
+	packets_written += wireshark_emit_queue_until(tracer, &tracer->packet_queue, till_time, i);
+
+	return packets_written;
 }
 	
 static void advance_other_tracer(struct tracers *tracer, struct timeval *till_time)
@@ -1195,16 +1209,14 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 	static int trigger = 0;
 	char trigger_comment[128];
 
-	
 	if(true == this_element->passed_inner_filter && !this_element->peer && true == start_triggers) {
 		struct timeval limit_time;
 		struct timeval delta_limit = { 0, 100 * 1000 }; 	// 100 msec
 		char comment_base[128];
 		char comment[128];
-		char other_comment[128];
 		struct tracers *other_tracer;
 		int trigger_queue_number = 0;    /* starts at -, ends in + at the trigger  */
-		int packets_in_other_queue;
+		int other_queue_base_number;	/* to offset in the "other queue" */
 
 		if(this_tracer == wan)
 			other_tracer = lan;
@@ -1216,24 +1228,27 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		struct packet_queue *queue;
 
 		sprintf(comment_base, "%s: prequeue", identify_tracer(this_tracer));
-		sprintf(other_comment, "%s", identify_tracer(other_tracer));
 	
 		queue = &this_tracer->old_queue;
-		packets_in_other_queue = count_packets_till_time(other_tracer,  this_element->packet_time);
-		fprintf(stderr, "%d packets in other queue\n", packets_in_other_queue);
 
 		if(queue->blocks_in_queue > 0) {
 			fprintf(stderr, "old queue has %d\n", queue->blocks_in_queue);
 			assert(queue->head && queue->tail);
 			trigger_queue_number = -queue->blocks_in_queue;
 		}
-		to_remove = queue->head;
 
+		to_remove = queue->head;
+		
 		if(to_remove)
 			advance_other_tracer(other_tracer, &to_remove->packet_time);
 
+		/* figure out how many packets are in other queue */
+		other_queue_base_number = count_packets_till_time(other_tracer,  this_element->packet_time);
+		other_queue_base_number -other_queue_base_number; 	/* make negative */
+
 		while(to_remove) {
-			wireshark_emit_until(other_tracer, &to_remove->packet_time);
+			other_queue_base_number += wireshark_emit_until(other_tracer, &to_remove->packet_time,
+						other_queue_base_number);
 
 			sprintf(comment, "%s: %d", comment_base, trigger_queue_number);
 			trigger_queue_number++;
@@ -1255,7 +1270,8 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 			
 		}
 		fprintf(stderr, "%d: trigger packet\n", trigger);
-		sprintf(trigger_comment, "trigger #%d", trigger);
+		sprintf(trigger_comment, "trigger %s #%d", identify_tracer(this_tracer),
+					trigger);
 		trigger++;
 		save_block_to_wireshark(this_element->block, trigger_comment);
 		no_peers++;
@@ -1263,12 +1279,12 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		free_packet_element(this_element);
 
 		sprintf(comment_base, "%s: postqueue", identify_tracer(this_tracer));
-		sprintf(other_comment, "%s: postqueue", identify_tracer(other_tracer));
 
 		queue = &this_tracer->packet_queue;
 		to_remove = queue->head;
 		while(to_remove && timercmp(&to_remove->packet_time, &limit_time, <)) {
-			wireshark_emit_until(other_tracer, &to_remove->packet_time);
+			other_queue_base_number += wireshark_emit_until(other_tracer, &to_remove->packet_time,
+							other_queue_base_number);
 
 			sprintf(comment, "%s %d", comment_base, trigger_queue_number);
 			trigger_queue_number++;
