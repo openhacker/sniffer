@@ -1,0 +1,10 @@
+Package: chox
+Version:  0.1-2
+Section: net
+Priority: optional
+Architecture: amd64
+Depends: wireshark-common
+Maintainer: Marty Leisner <maleisner@gmail.com>
+Description:  chox
+ Monitor and report discrepcies of wan/lan on router
+
