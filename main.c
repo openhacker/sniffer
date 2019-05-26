@@ -2000,7 +2000,8 @@ static void timeout_queues(void)
 
 		gettimeofday(&now, NULL);
 
-		fprintf(stderr, "%ld.%06ld: lan timedout = %d, wan timedout = %d\n", now.tv_sec, now.tv_usec, lan_timedout, wan_timedout);
+		if(verbose > 0) 
+			fprintf(stderr, "%ld.%06ld: lan timedout = %d, wan timedout = %d\n", now.tv_sec, now.tv_usec, lan_timedout, wan_timedout);
 	}
 }
 
