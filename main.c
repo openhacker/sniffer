@@ -30,7 +30,6 @@ static bool save_pcaps = false;
 static bool show_consec_packets = false;
 static int max_queue_elements = 100;
 
-static bool save_mismatches = false;
 static bool run_gui = false;
 static pid_t gui_pid;
 
@@ -60,6 +59,9 @@ static int packets_matched = 0;
 
 static int realtime_wireshark_fd = -1;
 static int mismatched_packet_fd = -1;
+
+/* should be MAXPATH_LEN? */
+static char output_directory[128] = "./";
 
 struct consec_stats {
 	int num_bursts;
@@ -666,12 +668,10 @@ static void reap_children(void)
 				return;
 			default:
 				if(gui_pid == pid) {
-					if(true == save_mismatches) {
-						fprintf(stderr, "gui died, ignoring\n");
-						run_gui = false;
-						close(realtime_wireshark_fd);
-						continue;
-					}
+					fprintf(stderr, "gui died, ignoring\n");
+					run_gui = false;
+					close(realtime_wireshark_fd);
+					continue;
 				}
 						
 				if(false == sig_intr_caught) {
@@ -685,7 +685,7 @@ static void reap_children(void)
 
 
 static struct tracers *new_tracer(int fd, const char *pipe, const char *interface, pid_t pid, 
-			bool wan, unsigned char mac_addr[6])
+		bool wan, unsigned char mac_addr[6])
 {
 	static int save_num = 0;
 	struct tracers *new;
@@ -1708,11 +1708,11 @@ static void create_temp_dir(void)
 
 static void usage(void) 
 {
-	printf("chox [-s] [-m] [-g] [-q prepend queue] [-c file]  -l lan -w wan [-f filter] [-v] [-b num] [-t] [-d capture]\n");
+	printf("chox [-s] [-D directory] [-g] [-q prepend queue] [-c file]  -l lan -w wan [-f filter] [-v] [-b num] [-t] [-d capture]\n");
 	printf("-s -- save pcaps\n");
 	printf("-l -- specify lan (downstream) tap\n");
 	printf("-w -- specify wan (upstream) tap\n");
-	printf("-m -- save mismatches to pcapng file\n");
+	printf("-D -- directory to store files (default to ./chox-<pid>\n");
 	printf("-f -- tshark filter expression\n");
 	printf("-v -- verbose\n");
 	printf("-b -- max queue elements\n");
@@ -1879,11 +1879,10 @@ static void terminate(void)
 
 static void setup_mismatched_file(void)
 {
+/* should be MAXPATH_LEN? */
 
-	if(false == save_mismatches)
-		return;
 
-	sprintf(mismatched_name, "mismatched.%d.pcapng", getpid());
+	sprintf(mismatched_name, "%s/mismatched.%d.pcapng", output_directory, getpid());
 	mismatched_packet_fd = open(mismatched_name, O_WRONLY | O_CREAT, 0644);
 	if(mismatched_packet_fd < 0) {
 		fprintf(stderr, "cannot created %s: %s\n", mismatched_name, strerror(errno));
@@ -2018,6 +2017,7 @@ int main(int argc, char *argv[])
 			.tv_sec = 1,
 			.tv_usec = 0
 			};
+	int result;
 	
 	create_temp_dir();
 
@@ -2025,7 +2025,7 @@ int main(int argc, char *argv[])
 		int c;
 		bool result;
 
-		c = getopt(argc, argv, "c:gq:d:pb:vsf:w:l:tm");
+		c = getopt(argc, argv, "D:c:gq:d:pb:vsf:w:l:t");
 		if(-1 == c)
 			break;
 		switch(c) {
@@ -2035,13 +2035,13 @@ int main(int argc, char *argv[])
 			case 'g':
 				run_gui = true;
 				break;
-			case 'm':
-				save_mismatches = true;
-				break;
 			case 'b':
 				max_queue_elements = atoi(optarg);
 				fprintf(stderr, "new max queue = %d\n", max_queue_elements);
 				break; 
+			case 'D':
+				strcpy(output_directory, optarg);	
+				break;
 			case 'c':
 				config_file = strdup(optarg);
 				break;
@@ -2085,13 +2085,19 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if(false == run_gui && false == save_mismatches) {
-		fprintf(stderr, "need to specify at least one -- save mismatches or run realtime gui\n\n");
-		usage();
-	}
-
 	if(config_file)
 		parse_config_file(config_file);
+
+
+	if(0 == output_directory[0]) {
+		sprintf(output_directory, "./chox.%d", getpid());
+	}
+
+	result = mkdir(output_directory, 0644);
+	if(result < 0) {
+		fprintf(stderr, "cannot make %s: %s\n", output_directory, strerror(errno));
+		exit(1);
+	}
 
 	wan =  do_tracer(true, wan_interface, wan_mac, wan_filter);
 	lan = do_tracer(false, lan_interface, lan_mac, lan_filter);
