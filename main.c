@@ -61,7 +61,7 @@ static int realtime_wireshark_fd = -1;
 static int mismatched_packet_fd = -1;
 
 /* should be MAXPATH_LEN? */
-static char output_directory[128] = "./";
+static char output_directory[128];
 
 struct consec_stats {
 	int num_bursts;
@@ -2093,7 +2093,7 @@ int main(int argc, char *argv[])
 		sprintf(output_directory, "./chox.%d", getpid());
 	}
 
-	result = mkdir(output_directory, 0644);
+	result = mkdir(output_directory, 0755);
 	if(result < 0) {
 		fprintf(stderr, "cannot make %s: %s\n", output_directory, strerror(errno));
 		exit(1);
