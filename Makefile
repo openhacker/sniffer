@@ -11,7 +11,7 @@ PROGS=chox
 
 all:	${PROGS}
 chox:	$(OBJS)
-	$(CC) -o $@ $^ -g 
+	$(CC) -o $@ $^ -g  -lmcheck
 
 pcapreader: pcapreader.c
 	${CC} -DDEBUG -o $@ $^ ${CFLAGS}

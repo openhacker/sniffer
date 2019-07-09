@@ -63,6 +63,11 @@ static int mismatched_packet_fd = -1;
 /* should be MAXPATH_LEN? */
 static char output_directory[128];
 
+
+/* increment for each mismatch write */
+static int mismatch_number = 0;
+
+
 struct consec_stats {
 	int num_bursts;
 	int num_packets;
@@ -762,7 +767,6 @@ static void close_and_repopen(int target_fd, const char *interface)
 		time_t current;
 
 		current = time(NULL);
-		fprintf(file, "file = %p\n", file);
 		fprintf(file, "pid = %d, time = %s\n", getpid(), ctime(&current));
 		fclose(file);
 	} else {
@@ -1882,7 +1886,7 @@ static void setup_mismatched_file(void)
 /* should be MAXPATH_LEN? */
 
 
-	sprintf(mismatched_name, "%s/mismatched.%d.pcapng", output_directory, getpid());
+	sprintf(mismatched_name, "%s/mismatched-%d.pcapng", output_directory, mismatch_number) ;
 	mismatched_packet_fd = open(mismatched_name, O_WRONLY | O_CREAT, 0644);
 	if(mismatched_packet_fd < 0) {
 		fprintf(stderr, "cannot created %s: %s\n", mismatched_name, strerror(errno));
@@ -2090,7 +2094,7 @@ int main(int argc, char *argv[])
 
 
 	if(0 == output_directory[0]) {
-		sprintf(output_directory, "./chox.%d", getpid());
+		sprintf(output_directory, "./chox-%d", getpid());
 	}
 
 	result = mkdir(output_directory, 0755);
@@ -2098,6 +2102,9 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "cannot make %s: %s\n", output_directory, strerror(errno));
 		exit(1);
 	}
+
+	fprintf(stderr, "Output directory = %s\n", output_directory);
+	
 
 	wan =  do_tracer(true, wan_interface, wan_mac, wan_filter);
 	lan = do_tracer(false, lan_interface, lan_mac, lan_filter);
