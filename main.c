@@ -163,9 +163,18 @@ static void save_block_to_wireshark(struct block_info *block, const char *commen
 
 static void save_block_to_prefix(struct block_info *block)
 {
+	void *cp;
+
 	prefix = realloc(prefix, prefix_length + block->block_length);
-	memcpy(prefix + prefix_length, block->block_body, block->block_length);
-	fprintf(stderr, "old prefix_length = %d, added %d\n", prefix_length, block->block_length);
+	cp = prefix + prefix_length;
+	*((uint32_t *) cp) = block->type;
+	cp += sizeof(block->type);
+	*((uint32_t *) cp) = block->block_length;
+	cp += sizeof(block->block_length);
+	memcpy(cp, block->block_body, block->body_length);
+	cp += block->body_length;
+	*((uint32_t *) cp) = block->block_length;
+//	fprintf(stderr, "old prefix_length = %d, added %d\n", prefix_length, block->block_length);
 	prefix_length += block->block_length;
 
 }
@@ -1889,6 +1898,8 @@ static void match_and_find_unmatched(void)
 
 static void terminate(void)
 {
+	fprintf(stderr, "%s\n", __func__);
+
 	if(verbose > 0) {
 		display_packet_list("lan", lan);
 		display_packet_list("wan", wan);
@@ -1903,13 +1914,16 @@ static void terminate(void)
 			fprintf(stderr, "Cannot unlink %s: %s\n", mismatched_name, strerror(errno));
 		}
 	
-		result = rmdir(output_directory);
 		if(result < 0) {
 			fprintf(stderr, "Cannot rmdir %s: %s\n", output_directory, strerror(errno));
 		}	
 	}
+	/* try to remove directory if nothing is in it */
+	rmdir(output_directory);
+
 	kill(wan->pid, SIGTERM);
 	kill(lan->pid, SIGTERM);
+
 	exit(0);
 }
 
@@ -1920,6 +1934,7 @@ static void setup_mismatched_file(void)
 
 
 	sprintf(mismatched_name, "%s/mismatched-%d.pcapng", output_directory, mismatch_number) ;
+	fprintf(stderr, "Creating mismatch file %s\n", mismatched_name);
 	mismatched_packet_fd = open(mismatched_name, O_WRONLY | O_CREAT, 0644);
 	if(mismatched_packet_fd < 0) {
 		fprintf(stderr, "cannot created %s: %s\n", mismatched_name, strerror(errno));
