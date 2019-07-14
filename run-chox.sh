@@ -19,5 +19,5 @@ then
 	 valgrind --leak-check=full --show-leak-kinds=all -v  --log-file=valgrind.$$.log \
 	 	./chox   -c config.file  -b 500 -q 50   -l $lan_name:$lan_mac -w $wan_name:$wan_mac
 else
-	 ./chox   -c config.file  -b 500 -q 50   -l $lan_name:$lan_mac -w $wan_name:$wan_mac
+	 ./chox   -c config.file  -v -b 500 -q 50  $CMD_LINE -l $lan_name:$lan_mac -w $wan_name:$wan_mac
 fi

@@ -139,20 +139,9 @@ static struct pcap_option_element *read_option(bool section_header, char *body, 
 				/* spec has too many TODO -- only handle optin_data[0] == 0 -- character data 
 				 * (not string)
   				 */
-#if 0
-				element->name = option_code;
-				element->type = byte_array;
-				element->byte_array_length = option_length;
-				element->byte_array = malloc(option_length);
-				memcpy(element->byte_array, body, option_length);
-#else
 				element->name = option_code;
 				element->type = char_pointer;
 				element->value = strndup( body + 1, option_length - 1);
-#endif
-				
-				
-				
 				break;
 			case if_tsresol:
 			case if_fsclen:

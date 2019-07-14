@@ -7,11 +7,15 @@ CFLAGS=-g  -Wall ${OPT}
 
 OBJS=main.o pcapreader.o
 
+ifdef MCHECK
+MCHECK_LIB=-lmcheck
+endif
+
 PROGS=chox 
 
 all:	${PROGS}
 chox:	$(OBJS)
-	$(CC) -o $@ $^ -g  -lmcheck
+	$(CC) -o $@ $^ -g   ${MCHECK_LIB}
 
 pcapreader: pcapreader.c
 	${CC} -DDEBUG -o $@ $^ ${CFLAGS}

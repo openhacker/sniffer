@@ -15,6 +15,7 @@
 #include <sys/time.h>
 #include <sys/prctl.h>
 #include <time.h>
+#include <mcheck.h>
 #include "pcap_reader.h"
 
 
@@ -133,11 +134,14 @@ static struct tracers *tracer_list;
 static struct tracers *lan;
 static struct tracers *wan;
 
+static void *prefix;
+static int prefix_length;
 static int no_peers = 0;	/* number of mismatched packets */
 
 static void found_packet_match(struct packet_element *lan_element, struct packet_element *wan_element);
 
 static bool read_pcap_packet(struct tracers *this);
+static void setup_mismatched_file(void);
 
 static void catch_child(int signo)
 {
@@ -155,6 +159,15 @@ static void save_block_to_wireshark(struct block_info *block, const char *commen
 		save_block(realtime_wireshark_fd, block, comment);
 	if(mismatched_packet_fd >= 0) 
 		save_block(mismatched_packet_fd, block, comment);
+}
+
+static void save_block_to_prefix(struct block_info *block)
+{
+	prefix = realloc(prefix, prefix_length + block->block_length);
+	memcpy(prefix + prefix_length, block->block_body, block->block_length);
+	fprintf(stderr, "old prefix_length = %d, added %d\n", prefix_length, block->block_length);
+	prefix_length += block->block_length;
+
 }
 
 static void print_tracer_packets(struct tracers *this)
@@ -1213,6 +1226,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 	static int trigger = 0;
 	char trigger_comment[128];
 
+
 	if(true == this_element->passed_inner_filter && !this_element->peer && true == start_triggers) {
 		struct timeval limit_time;
 		struct timeval delta_limit = { 0, 100 * 1000 }; 	// 100 msec
@@ -1222,6 +1236,9 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		int trigger_queue_number = 0;    /* starts at -, ends in + at the trigger  */
 		int other_queue_base_number;	/* to offset in the "other queue" */
 
+		setup_mismatched_file();
+
+		
 		if(this_tracer == wan)
 			other_tracer = lan;
 		else	other_tracer = wan;
@@ -1307,7 +1324,11 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 				assert(queue->blocks_in_queue == 0);
 			}
 			to_remove = queue->head;
+
 		}
+		close(mismatched_packet_fd);
+		mismatched_packet_fd = -1;
+		mismatch_number++;	
 	} else {
 		/* add the element to the old_queue, maybe freeing the head element if too big */
 		struct packet_queue *queue;
@@ -1598,6 +1619,7 @@ static bool read_pcap_packet(struct tracers *this)
 			if(false == seen_section_header) {
 				seen_section_header = true;
 				save_block_to_wireshark(block, NULL);
+				save_block_to_prefix(block);
 			}
 			return true;
 		case interface_description:
@@ -1608,6 +1630,7 @@ static bool read_pcap_packet(struct tracers *this)
 			this->interface_description = block;
 			this->interface_id = ++interface_id_seen;
 			save_block_to_wireshark(block, NULL);
+			save_block_to_prefix(block);
 			break;
 		default:
 			fprintf(stderr, "unknown block type  = 0x%x\n", block->type);
@@ -1872,8 +1895,18 @@ static void terminate(void)
 	}
 	statistics();
 	if(mismatched_packet_fd >= 0 && 0 == no_peers) {
+		int result;
+
 		fprintf(stderr, "no mismatched packets\n");
-		unlink(mismatched_name);
+		result = unlink(mismatched_name);
+		if(result < 0) {
+			fprintf(stderr, "Cannot unlink %s: %s\n", mismatched_name, strerror(errno));
+		}
+	
+		result = rmdir(output_directory);
+		if(result < 0) {
+			fprintf(stderr, "Cannot rmdir %s: %s\n", output_directory, strerror(errno));
+		}	
 	}
 	kill(wan->pid, SIGTERM);
 	kill(lan->pid, SIGTERM);
@@ -1883,15 +1916,18 @@ static void terminate(void)
 
 static void setup_mismatched_file(void)
 {
-/* should be MAXPATH_LEN? */
+	int result;
 
 
 	sprintf(mismatched_name, "%s/mismatched-%d.pcapng", output_directory, mismatch_number) ;
 	mismatched_packet_fd = open(mismatched_name, O_WRONLY | O_CREAT, 0644);
 	if(mismatched_packet_fd < 0) {
 		fprintf(stderr, "cannot created %s: %s\n", mismatched_name, strerror(errno));
+		exit(1);
 	}
 	
+	result = write(mismatched_packet_fd, prefix, prefix_length);
+	assert(result == prefix_length);
 }
 
 static void setup_realtime_wireshark(void)
@@ -1900,7 +1936,9 @@ static void setup_realtime_wireshark(void)
 	int result;
 	char *program = "wireshark-gtk";
 
+#if 0
 	setup_mismatched_file();
+#endif
 
 	if(false == run_gui)
 		return;		/* TODO: refactor this */
@@ -2004,7 +2042,8 @@ static void timeout_queues(void)
 		gettimeofday(&now, NULL);
 
 		if(verbose > 0) 
-			fprintf(stderr, "%ld.%06ld: lan timedout = %d, wan timedout = %d\n", now.tv_sec, now.tv_usec, lan_timedout, wan_timedout);
+			fprintf(stderr, "%ld.%06ld: lan timedout = %d, wan timedout = %d\n", 
+							now.tv_sec, now.tv_usec, lan_timedout, wan_timedout);
 	}
 }
 
@@ -2022,6 +2061,7 @@ int main(int argc, char *argv[])
 			.tv_usec = 0
 			};
 	int result;
+
 	
 	create_temp_dir();
 
