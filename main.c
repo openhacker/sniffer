@@ -97,6 +97,9 @@ struct packet_element {
 	struct packet_element *peer;	/* matching packet on other interface */
 	struct packet_element *next;
 	struct packet_element *prev;
+#ifdef MAGIC
+	void *magic;
+#endif
 };
 	
 struct packet_queue {
@@ -183,6 +186,7 @@ static void print_tracer_packets(struct tracers *this)
 {
 	struct packet_element *packet;
 
+	
 	for(packet = this->packet_queue.tail; packet; packet = packet->prev) {
 		assert(enhanced_packet_block == packet->block->type);
 		print_enhanced_packet_block(packet->block);
@@ -232,6 +236,7 @@ static void classify_packet(const char *type, struct packet_element *p)
 	char dest_mac[2 * 6 + 6];
 	unsigned short ethertype;
 
+	TEST_MAGIC(p);
 	timersub(&p->packet_time, &first_packet, &offset);
 
 	fprintf(stderr, "%s: packet #%d, %s, offset %ld:%06ld\n", type,
@@ -904,7 +909,9 @@ static void free_packet_element(struct packet_element *this)
 #if 0
 	fprintf(stderr, "free packet element: %p\n", this);
 #endif
+	TEST_MAGIC(this);
 	free_block(this->block);
+	TEST_MAGIC(this);
 	free(this);
 }
 	
@@ -951,6 +958,7 @@ static double packet_delay(struct timeval *tv)
 
 static void try_to_find_peer(bool is_wan, struct packet_element *packet)
 {
+	TEST_MAGIC(packet);
 	assert(packet->peer == NULL);
 	if(true == is_wan) {
 		/* packet is wan packet */
@@ -1108,12 +1116,14 @@ static int wireshark_emit_queue_until(struct tracers *tracer, struct packet_queu
 			queue->tail = NULL;
 		}
 	}
+#if 0
 	if(removed > 0) {
 		struct timeval now;
 		
 		gettimeofday(&now, NULL);
 		fprintf(stderr, "%ld:%06ld wrote to wireshark %d elements %s\n", now.tv_sec, now.tv_usec, removed, base_comment);
 	}
+#endif
 
 	return removed;
 
@@ -1235,6 +1245,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 	static int trigger = 0;
 	char trigger_comment[128];
 
+	TEST_MAGIC(this_element);
 
 	if(true == this_element->passed_inner_filter && !this_element->peer && true == start_triggers) {
 		struct timeval limit_time;
@@ -1244,15 +1255,18 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		struct tracers *other_tracer;
 		int trigger_queue_number = 0;    /* starts at -, ends in + at the trigger  */
 		int other_queue_base_number;	/* to offset in the "other queue" */
+		struct timeval start;
+		struct timeval stop;
+		struct timeval delta;
+
+		gettimeofday(&start, NULL);
 
 		setup_mismatched_file();
 
-		
 		if(this_tracer == wan)
 			other_tracer = lan;
 		else	other_tracer = wan;
 		
-
 		/* save prequeue and this element to wireshark */
 		struct packet_element *to_remove;
 		struct packet_queue *queue;
@@ -1269,14 +1283,17 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 
 		to_remove = queue->head;
 		
-		if(to_remove)
+		if(to_remove) {
+			TEST_MAGIC(to_remove);
 			advance_other_tracer(other_tracer, &to_remove->packet_time);
+		}
 
 		/* figure out how many packets are in other queue */
 		other_queue_base_number = count_packets_till_time(other_tracer,  this_element->packet_time);
 		other_queue_base_number = -other_queue_base_number; 	/* make negative */
 
 		while(to_remove) {
+			TEST_MAGIC(to_remove);
 			other_queue_base_number += wireshark_emit_until(other_tracer, &to_remove->packet_time,
 						other_queue_base_number);
 
@@ -1313,6 +1330,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		queue = &this_tracer->packet_queue;
 		to_remove = queue->head;
 		while(to_remove && timercmp(&to_remove->packet_time, &limit_time, <)) {
+			TEST_MAGIC(to_remove);
 			other_queue_base_number += wireshark_emit_until(other_tracer, &to_remove->packet_time,
 							other_queue_base_number);
 
@@ -1338,6 +1356,10 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		close(mismatched_packet_fd);
 		mismatched_packet_fd = -1;
 		mismatch_number++;	
+		gettimeofday(&stop, NULL);
+		timersub(&stop, &start, &delta);
+		fprintf(stderr, "time to write: %ld.%06ld\n", delta.tv_sec, delta.tv_usec);
+		
 	} else {
 		/* add the element to the old_queue, maybe freeing the head element if too big */
 		struct packet_queue *queue;
@@ -1396,6 +1418,7 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 	uint64_t fraction;
 
 	this_element = calloc(sizeof *this_element, 1);
+	SET_MAGIC(this_element);
 	assert(this_element != NULL);
 	gettimeofday(&this_element->enqueue_time, NULL);
 #if 0
@@ -1575,7 +1598,8 @@ static int compute_clock_divisor(char byte)
 		
 static void set_interface_id(struct block_info *block, int interface_id)
 {
-	*(int *) block->block_body = interface_id;	/* ??? */
+	assert(block->body_length > sizeof(int));
+	*((int *) block->block_body) = interface_id;	/* ??? */
 }
  
 static void figure_out_clock_divisor(struct tracers *tracer)
