@@ -144,7 +144,7 @@ static int no_peers = 0;	/* number of mismatched packets */
 static void found_packet_match(struct packet_element *lan_element, struct packet_element *wan_element);
 
 static bool read_pcap_packet(struct tracers *this);
-static void setup_mismatched_file(void);
+static void setup_mismatched_file(number);
 
 static void catch_child(int signo)
 {
@@ -1261,7 +1261,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 
 		gettimeofday(&start, NULL);
 
-		setup_mismatched_file();
+		setup_mismatched_file(mismatch_number);
 
 		if(this_tracer == wan)
 			other_tracer = lan;
@@ -1331,6 +1331,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		to_remove = queue->head;
 		while(to_remove && timercmp(&to_remove->packet_time, &limit_time, <)) {
 			TEST_MAGIC(to_remove);
+
 			other_queue_base_number += wireshark_emit_until(other_tracer, &to_remove->packet_time,
 							other_queue_base_number);
 
@@ -1952,12 +1953,11 @@ static void terminate(void)
 }
 
 
-static void setup_mismatched_file(void)
+static void setup_mismatched_file(int number)
 {
 	int result;
 
-
-	sprintf(mismatched_name, "%s/mismatched-%d.pcapng", output_directory, mismatch_number) ;
+	sprintf(mismatched_name, "%s/mismatched-%d.pcapng", output_directory, number) ;
 	fprintf(stderr, "Creating mismatch file %s\n", mismatched_name);
 	mismatched_packet_fd = open(mismatched_name, O_WRONLY | O_CREAT, 0644);
 	if(mismatched_packet_fd < 0) {
@@ -1975,9 +1975,6 @@ static void setup_realtime_wireshark(void)
 	int result;
 	char *program = "wireshark-gtk";
 
-#if 0
-	setup_mismatched_file();
-#endif
 
 	if(false == run_gui)
 		return;		/* TODO: refactor this */
