@@ -63,6 +63,7 @@ struct pcap_option_element {
 };
 	
 	
+#define MAGIC
 struct block_info {
 	enum block_type type;
 	int block_length;
@@ -75,7 +76,24 @@ struct block_info {
 	uint32_t captured_packet_length;
 	uint32_t original_packet_length;
 	uint32_t interface_id;
+#ifdef MAGIC
+	void *indirect;
+	void *magic;
+#endif
 };
+
+
+#ifdef MAGIC
+#define SET_INDIRECT(x, p) { x->indirect = p; }
+#define TEST_INDIRECT(x, p) { assert(x->indirect == p); }
+#define SET_MAGIC(x) 	{ x->magic  = x; }
+#define TEST_MAGIC(x)	{ assert(x == x->magic); }
+#else
+#define SET_INDIRECT(x, p)
+#define TEST_INDIRECT(x, p)
+#define SET_MAGIC(x)
+#define TEST_MAGIC(x)
+#endif
 
 
 struct block_info *read_pcap_block(int fd);

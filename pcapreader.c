@@ -15,12 +15,14 @@ static struct block_info *get_new_block(enum block_type block_type, uint32_t len
 	struct block_info *block;
 
 	block = calloc(sizeof *block, 1);
+	SET_MAGIC(block);
 	assert(block);
 	block->type = block_type;
 	block->block_length = length;
 	block->body_length = length - 12;
 	block->block_body = malloc(block->body_length);
 	assert(block->block_body);
+	SET_INDIRECT(block, block->block_body);
 	return block;
 }
 
@@ -382,6 +384,8 @@ struct pcap_option_element *decode_header_options(struct block_info *block)
 
 void free_block(struct block_info *block)
 {
+	TEST_MAGIC(block);
+	TEST_INDIRECT(block, block->block_body);	
 	free(block->block_body);
 	free(block);
 }
@@ -451,6 +455,7 @@ struct block_info *read_pcap_block(int fd)
 	
 	block = get_new_block(block_type, block_length);
 	assert(block);
+	TEST_MAGIC(block);
 
 	result = safe_read(fd, block->block_body, block->body_length);
 	assert(result == block->body_length);
@@ -461,6 +466,8 @@ struct block_info *read_pcap_block(int fd)
 	if(enhanced_packet_block == block_type) {
 		decode_enhanced_packet_block(block);
 	}
+	TEST_MAGIC(block);
+	TEST_INDIRECT(block, block->block_body);
 	return block;
 }
 
@@ -499,7 +506,14 @@ static struct option_block *construct_ascii_option(enum opt_name option, const c
 	new_block = malloc(sizeof *new_block);
 	length = strlen(string);
 	rounded_length = round_to_dword(length);
+	
+#if 0
+	// was malloc -- but write initialized data
 	new_block->data = malloc(rounded_length + 4);
+	*(uint32_t *) (new_block->data + 4) = 0;	// write up to 4 bytes at end -- maybe calloc? */
+#else
+	new_block->data = calloc(rounded_length + 4, 1);
+#endif
 	new_block->size = rounded_length + 4;
 	*(unsigned short *) new_block->data = option;
 	*(unsigned short *) (new_block->data + 2) = length;
