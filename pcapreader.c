@@ -5,6 +5,9 @@
 #include <string.h>
 #include <assert.h>
 #include <stdbool.h>
+#ifdef USE_DMALLOC
+#include <dmalloc.h>
+#endif
 #include "pcap_reader.h"
 
 

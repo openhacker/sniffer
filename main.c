@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <unistd.h>
+#include <stdarg.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,13 +17,16 @@
 #include <sys/prctl.h>
 #include <time.h>
 #include <mcheck.h>
+#ifdef USE_DMALLOC
+#include <dmalloc.h>
+#endif
 #include "pcap_reader.h"
 
 
 static bool sig_child_caught = false;
 
 static bool start_triggers = false;
-static bool sig_intr_caught = false;
+static bool terminate_program = false;
 
 static char temp_dir[128];
 
@@ -67,6 +71,12 @@ static char output_directory[128];
 
 /* increment for each mismatch write */
 static int mismatch_number = 0;
+
+
+/* semaphore -- while this is true, don't start writing (or count down) */
+static bool writing_mismatches = false;
+static pid_t writing_pid;
+
 
 
 struct consec_stats {
@@ -144,16 +154,38 @@ static int no_peers = 0;	/* number of mismatched packets */
 static void found_packet_match(struct packet_element *lan_element, struct packet_element *wan_element);
 
 static bool read_pcap_packet(struct tracers *this);
-static void setup_mismatched_file(number);
+static void setup_mismatched_file(int number);
+
+
+static int log_wtime(const char *format, ...)
+{
+	int ret;
+
+	va_list args;
+	struct timeval tv;
+	struct tm *broken;
+	char string[40];
+
+	gettimeofday(&tv, NULL);
+	broken = localtime(&tv.tv_sec);
+	strftime(string, sizeof string, "%H:%M:%S", broken);
+
+	fprintf(stderr, "(%d) %s.%06lu ", getpid(), string, tv.tv_usec);
+	
+	va_start(args, format);
+	ret = vfprintf(stderr, format, args);
+	va_end(args);
+	return ret;
+}
 
 static void catch_child(int signo)
 {
 	sig_child_caught = true;	
 }
 
-static void catch_intr(int signo)
+static void catch_terminate(int signo)
 {
-	sig_intr_caught = true;
+	terminate_program = true;
 }
 
 static void save_block_to_wireshark(struct block_info *block, const char *comment)
@@ -565,7 +597,7 @@ static bool compare_ipv4_packets(unsigned char *lan_ip_header, unsigned char *wa
 		case 17:
 			is_pair = compare_udp_packet(lan_ip_header + ip_header_size, 
 					wan_ip_header + ip_header_size, remaining_length);
-			fprintf(stderr, "compare udp packet: %d\n", is_pair);
+//			fprintf(stderr, "compare udp packet: %d\n", is_pair);
 			break;
 		default:
 			fprintf(stderr, "unknown protocol type = %d\n", protocol_type);
@@ -705,12 +737,25 @@ static void reap_children(void)
 					close(realtime_wireshark_fd);
 					continue;
 				}
-						
-				if(false == sig_intr_caught) {
-					fprintf(stderr, "child died %d\n", pid);
+				
+				if(lan && lan->pid == pid) {
+					fprintf(stderr, "lan dumpcap died\n");
 					exit(1);
 				}
-				remove_tracer(pid);
+
+				if(wan && wan->pid == pid) {
+					fprintf(stderr, "wan dumpcap died\n");
+					exit(1);
+				
+				}
+				if(pid == writing_pid) {
+					assert(true == writing_mismatches);
+					fprintf(stderr, "writing pid readed\n");
+					writing_mismatches = false;
+					continue;
+				}			
+				fprintf(stderr, "child died %d\n", pid);
+				break;
 		}
 	}
 }
@@ -1237,131 +1282,9 @@ static int count_packets_till_time(struct tracers *tracer, struct timeval this_t
 	return packets;
 }
 
-/* look to see if this packet has a peer -- if not, write out to wireshark the prepend queue (emptying queue)
- * and this packet
- */
-static void move_to_old_queue(struct tracers *this_tracer, struct packet_element *this_element)
+static void just_remove(struct tracers *this_tracer, struct packet_element *this_element) 
 {
-	static int trigger = 0;
-	char trigger_comment[128];
 
-	TEST_MAGIC(this_element);
-
-	if(true == this_element->passed_inner_filter && !this_element->peer && true == start_triggers) {
-		struct timeval limit_time;
-		struct timeval delta_limit = { 0, 100 * 1000 }; 	// 100 msec
-		char comment_base[128];
-		char comment[128];
-		struct tracers *other_tracer;
-		int trigger_queue_number = 0;    /* starts at -, ends in + at the trigger  */
-		int other_queue_base_number;	/* to offset in the "other queue" */
-		struct timeval start;
-		struct timeval stop;
-		struct timeval delta;
-
-		gettimeofday(&start, NULL);
-
-		setup_mismatched_file(mismatch_number);
-
-		if(this_tracer == wan)
-			other_tracer = lan;
-		else	other_tracer = wan;
-		
-		/* save prequeue and this element to wireshark */
-		struct packet_element *to_remove;
-		struct packet_queue *queue;
-
-		sprintf(comment_base, "%s: prequeue", identify_tracer(this_tracer));
-	
-		queue = &this_tracer->old_queue;
-
-		if(queue->blocks_in_queue > 0) {
-			fprintf(stderr, "old queue has %d\n", queue->blocks_in_queue);
-			assert(queue->head && queue->tail);
-			trigger_queue_number = -queue->blocks_in_queue;
-		}
-
-		to_remove = queue->head;
-		
-		if(to_remove) {
-			TEST_MAGIC(to_remove);
-			advance_other_tracer(other_tracer, &to_remove->packet_time);
-		}
-
-		/* figure out how many packets are in other queue */
-		other_queue_base_number = count_packets_till_time(other_tracer,  this_element->packet_time);
-		other_queue_base_number = -other_queue_base_number; 	/* make negative */
-
-		while(to_remove) {
-			TEST_MAGIC(to_remove);
-			other_queue_base_number += wireshark_emit_until(other_tracer, &to_remove->packet_time,
-						other_queue_base_number);
-
-			sprintf(comment, "%s: %d", comment_base, trigger_queue_number);
-			trigger_queue_number++;
-			save_block_to_wireshark(to_remove->block, comment);
-			queue->head = to_remove->next;
-			queue->blocks_in_queue--;	
-
-			free_packet_element(to_remove);
-
-			if(queue->head) {
-				queue->head->prev = NULL;
-				assert(queue->blocks_in_queue > 0);
-			} else {
-				queue->head = NULL;
-				queue->tail = NULL;
-				assert(queue->blocks_in_queue == 0);
-			}
-			to_remove = queue->head;
-			
-		}
-		fprintf(stderr, "%d: trigger packet\n", trigger);
-		sprintf(trigger_comment, "trigger %s #%d", identify_tracer(this_tracer),
-					trigger);
-		trigger++;
-		save_block_to_wireshark(this_element->block, trigger_comment);
-		no_peers++;
-		timeradd(&this_element->packet_time, &delta_limit, &limit_time);
-		free_packet_element(this_element);
-
-		sprintf(comment_base, "%s: postqueue", identify_tracer(this_tracer));
-
-		queue = &this_tracer->packet_queue;
-		to_remove = queue->head;
-		while(to_remove && timercmp(&to_remove->packet_time, &limit_time, <)) {
-			TEST_MAGIC(to_remove);
-
-			other_queue_base_number += wireshark_emit_until(other_tracer, &to_remove->packet_time,
-							other_queue_base_number);
-
-			sprintf(comment, "%s %d", comment_base, trigger_queue_number);
-			trigger_queue_number++;
-			save_block_to_wireshark(to_remove->block, comment);
-			queue->head = to_remove->next;
-			queue->blocks_in_queue--;	
-
-			free_packet_element(to_remove);
-
-			if(queue->head) {
-				queue->head->prev = NULL;
-				assert(queue->blocks_in_queue > 0);
-			} else {
-				queue->head = NULL;
-				queue->tail = NULL;
-				assert(queue->blocks_in_queue == 0);
-			}
-			to_remove = queue->head;
-
-		}
-		close(mismatched_packet_fd);
-		mismatched_packet_fd = -1;
-		mismatch_number++;	
-		gettimeofday(&stop, NULL);
-		timersub(&stop, &start, &delta);
-		fprintf(stderr, "time to write: %ld.%06ld\n", delta.tv_sec, delta.tv_usec);
-		
-	} else {
 		/* add the element to the old_queue, maybe freeing the head element if too big */
 		struct packet_queue *queue;
 
@@ -1406,6 +1329,196 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 			queue->tail = this_element;
 			this_element->next = NULL;
 		}
+}
+
+static void erase_queue(struct packet_queue *queue)
+{
+	while(queue->head) {
+		struct packet_element *next;
+
+		next = queue->head->next;
+		free_packet_element(queue->head);
+		queue->head = next;
+		if(next) {
+			next->prev = NULL;
+		}
+		queue->blocks_in_queue--;
+		if(!next) {
+			assert(queue->blocks_in_queue == 0);
+			assert(NULL == queue->head);
+			queue->tail = NULL;
+			return;
+		}
+	}
+}
+
+static void erase_pending_packets(struct tracers *this_tracer, struct packet_element *this_element)
+{
+	/* erase old queues */
+	erase_queue(&wan->old_queue);
+	erase_queue(&lan->old_queue);
+	just_remove(this_tracer, this_element);
+}
+
+/* look to see if this packet has a peer -- if not, write out to wireshark the prepend queue (emptying queue)
+ * and this packet
+ */
+static void move_to_old_queue(struct tracers *this_tracer, struct packet_element *this_element)
+{
+	TEST_MAGIC(this_element);
+
+	if(true == this_element->passed_inner_filter && !this_element->peer && true == start_triggers) {
+		static int trigger;
+		struct timeval limit_time;
+		char trigger_comment[128];
+		struct timeval delta_limit = { 0, 100 * 1000 }; 	// 100 msec
+		char comment_base[128];
+		char comment[128];
+		struct tracers *other_tracer;
+		int trigger_queue_number = 0;    /* starts at -, ends in + at the trigger  */
+		int other_queue_base_number;	/* to offset in the "other queue" */
+		struct timeval start;
+		struct timeval stop;
+		struct timeval delta;
+		pid_t pid;
+
+
+		if( true == writing_mismatches) {
+			log_wtime("want to write, but writing mismatches\n");
+			just_remove(this_tracer, this_element);
+			return;
+		}
+	
+		pid = fork();
+		log_wtime("PID %d: fork returned %d\n", getpid(), pid); 
+		switch(pid) {
+			default:
+				mismatch_number++;
+				writing_mismatches = true;
+				writing_pid = pid;
+				erase_pending_packets(this_tracer, this_element);
+				return;
+			case -1:
+				log_wtime("fork failed: %s\n", strerror(errno));
+				exit(1);
+			case 0:
+				break;
+		}
+
+		/* child process */
+			
+		gettimeofday(&start, NULL);
+
+		setup_mismatched_file(mismatch_number);
+
+		if(this_tracer == wan)
+			other_tracer = lan;
+		else	other_tracer = wan;
+		
+		/* save prequeue and this element to wireshark */
+		struct packet_element *to_remove;
+		struct packet_queue *queue;
+
+		log_wtime("pre lan = %d,  pre wan = %d, post lan = %d, post wan = %d\n", 
+			lan->old_queue.blocks_in_queue, wan->old_queue.blocks_in_queue,
+			lan->packet_queue.blocks_in_queue, wan->packet_queue.blocks_in_queue);
+				
+
+		sprintf(comment_base, "%s: prequeue", identify_tracer(this_tracer));
+		queue = &this_tracer->old_queue;
+
+		if(queue->blocks_in_queue > 0) {
+			fprintf(stderr, "old queue has %d\n", queue->blocks_in_queue);
+			assert(queue->head && queue->tail);
+			trigger_queue_number = -queue->blocks_in_queue;
+		}
+
+		to_remove = queue->head;
+		
+		if(to_remove) {
+			TEST_MAGIC(to_remove);
+			advance_other_tracer(other_tracer, &to_remove->packet_time);
+		}
+
+		/* figure out how many packets are in other queue */
+		other_queue_base_number = count_packets_till_time(other_tracer,  this_element->packet_time);
+		other_queue_base_number = -other_queue_base_number; 	/* make negative */
+
+		while(to_remove) {
+			TEST_MAGIC(to_remove);
+			other_queue_base_number += wireshark_emit_until(other_tracer, &to_remove->packet_time,
+						other_queue_base_number);
+
+			sprintf(comment, "%s: %d", comment_base, trigger_queue_number);
+			trigger_queue_number++;
+			save_block_to_wireshark(to_remove->block, comment);
+			queue->head = to_remove->next;
+			queue->blocks_in_queue--;	
+
+			free_packet_element(to_remove);
+
+			if(queue->head) {
+				queue->head->prev = NULL;
+				assert(queue->blocks_in_queue > 0);
+			} else {
+				queue->head = NULL;
+				queue->tail = NULL;
+				assert(queue->blocks_in_queue == 0);
+			}
+			to_remove = queue->head;
+			
+		}
+		log_wtime("%d: trigger packet\n", trigger);
+		sprintf(trigger_comment, "trigger %s #%d", identify_tracer(this_tracer),
+					trigger);
+		trigger++;
+		save_block_to_wireshark(this_element->block, trigger_comment);
+		no_peers++;
+		timeradd(&this_element->packet_time, &delta_limit, &limit_time);
+		free_packet_element(this_element);
+
+		sprintf(comment_base, "%s: postqueue", identify_tracer(this_tracer));
+
+		queue = &this_tracer->packet_queue;
+		to_remove = queue->head;
+		log_wtime("lan post queue = %d, wan post queue = %d\n", lan->packet_queue.blocks_in_queue, 
+						wan->packet_queue.blocks_in_queue);
+
+		while(to_remove && timercmp(&to_remove->packet_time, &limit_time, <)) {
+			TEST_MAGIC(to_remove);
+
+			other_queue_base_number += wireshark_emit_until(other_tracer, &to_remove->packet_time,
+							other_queue_base_number);
+
+			sprintf(comment, "%s %d", comment_base, trigger_queue_number);
+			trigger_queue_number++;
+			save_block_to_wireshark(to_remove->block, comment);
+			queue->head = to_remove->next;
+			queue->blocks_in_queue--;	
+
+			free_packet_element(to_remove);
+
+			if(queue->head) {
+				queue->head->prev = NULL;
+				assert(queue->blocks_in_queue > 0);
+			} else {
+				queue->head = NULL;
+				queue->tail = NULL;
+				assert(queue->blocks_in_queue == 0);
+			}
+			to_remove = queue->head;
+
+		}
+		close(mismatched_packet_fd);
+		mismatched_packet_fd = -1;
+		mismatch_number++;	
+		gettimeofday(&stop, NULL);
+		timersub(&stop, &start, &delta);
+		log_wtime("time to write: %ld.%06ld\n", delta.tv_sec, delta.tv_usec);
+		kill(getppid(), SIGTERM);
+		exit(0);
+	} else {
+		just_remove(this_tracer, this_element);
 	}
 }
 
@@ -1958,7 +2071,7 @@ static void setup_mismatched_file(int number)
 	int result;
 
 	sprintf(mismatched_name, "%s/mismatched-%d.pcapng", output_directory, number) ;
-	fprintf(stderr, "Creating mismatch file %s\n", mismatched_name);
+	log_wtime("Creating mismatch file %s\n", mismatched_name);
 	mismatched_packet_fd = open(mismatched_name, O_WRONLY | O_CREAT, 0644);
 	if(mismatched_packet_fd < 0) {
 		fprintf(stderr, "cannot created %s: %s\n", mismatched_name, strerror(errno));
@@ -2202,7 +2315,8 @@ int main(int argc, char *argv[])
 		
 	signal(SIGCHLD, catch_child);
 	signal(SIGUSR1, statistics);
-	signal(SIGINT, catch_intr);
+	signal(SIGINT, catch_terminate);
+	signal(SIGTERM,  catch_terminate);
 
 	gettimeofday(&start_time, NULL);
 	timeradd(&start_time, &delta, &target_time);
@@ -2222,7 +2336,7 @@ int main(int argc, char *argv[])
 			printf("caught sig child\n");
 			reap_children();
 		}
-		if(true == sig_intr_caught) {
+		if(true == terminate_program) {
 			terminate();
 		}
 		
