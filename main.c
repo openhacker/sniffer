@@ -750,7 +750,7 @@ static void reap_children(void)
 				}
 				if(pid == writing_pid) {
 					assert(true == writing_mismatches);
-					fprintf(stderr, "writing pid readed\n");
+					log_wtime("writing process seen ended\n");
 					writing_mismatches = false;
 					continue;
 				}			
@@ -866,7 +866,9 @@ static int run_tracer(const char *named_pipe,  const char *interface, const char
 
        // see https://stackoverflow.com/questions/284325/how-to-make-child-process-die-after-parent-exits/17589555#17589555
 	// not sure why this isn't working
+	
 	prctl(PR_SET_PDEATHSIG, SIGTERM);       // linux only, didn't know about it
+	log_wtime("launching dumpcap for %s\n", interface);
 
 	close_and_repopen(1, interface);
 	close_and_repopen(2, interface);
@@ -1282,53 +1284,80 @@ static int count_packets_till_time(struct tracers *tracer, struct timeval this_t
 	return packets;
 }
 
+static struct packet_element *unlink_head_element(struct packet_queue *this_queue)
+{
+	struct packet_element *to_remove;
+	
+	to_remove = this_queue->head;
+	if(NULL == to_remove) {
+		assert(0 == this_queue->blocks_in_queue);
+		return NULL;
+	}
+
+	assert(to_remove->prev == NULL);
+	this_queue->head = to_remove->next;
+
+	if(this_queue->head) {
+		this_queue->head->prev = NULL;
+	} else {
+		/* queue better be empty */
+		assert(this_queue->tail == to_remove);
+		assert(this_queue->blocks_in_queue  == 1);
+		this_queue->tail = NULL;
+	}
+	this_queue->blocks_in_queue--;
+	return to_remove;
+}
+
+/* this_element is already unlinked, add it to the old queue */
 static void just_remove(struct tracers *this_tracer, struct packet_element *this_element) 
 {
 
-		/* add the element to the old_queue, maybe freeing the head element if too big */
-		struct packet_queue *queue;
+	/* add the element to the old_queue, maybe freeing the head element if too big */
+	struct packet_queue *queue;
 
-		if(0 == prepend_queue)  {
-			free_packet_element(this_element);
-			return;
-		}
+	if(0 == prepend_queue)  {
+		free_packet_element(this_element);
+		assert(0);	// this isn't right 
+		return;
+	}
 
-		queue = &this_tracer->old_queue;
-		queue->blocks_in_queue++;
-		if(queue->blocks_in_queue > prepend_queue) {
-			/* pop off the head element */
-			struct packet_element *to_remove;
+	queue = &this_tracer->old_queue;
+	queue->blocks_in_queue++;
+	if(queue->blocks_in_queue > prepend_queue) {
+		/* pop off the head element */
+		struct packet_element *to_remove;
 
-			to_remove = queue->head;
-			queue->head = to_remove->next;
-			if(NULL == queue->head) {
-				queue->tail = NULL;
-				/* queue should be empty -- need to insert one element */
-				assert(queue->blocks_in_queue == 1);
-			} else	{
-				queue->head->prev = NULL;
-			}
-			free_packet_element(to_remove);
-			queue->blocks_in_queue--;
-		}
-		
-		/* add this element to the tail -- already incremented */
-#if 0
-		fprintf(stderr, "add element to old queue = %p\n", this_element);
-#endif
+		to_remove = queue->head;
+		queue->head = to_remove->next;
 		if(NULL == queue->head) {
-			/* empty queue */
-			assert(NULL == queue->tail);
-			queue->head = queue->tail = this_element;
-			this_element->next = this_element->prev = NULL;
-			assert(1 == queue->blocks_in_queue);
-		} else {
-			assert(queue->tail);	
-			this_element->prev = queue->tail;
-			queue->tail->next = this_element;
-			queue->tail = this_element;
-			this_element->next = NULL;
+			queue->tail = NULL;
+			/* queue should be empty -- need to insert one element */
+			assert(queue->blocks_in_queue == 1);
+		} else	{
+			queue->head->prev = NULL;
 		}
+		free_packet_element(to_remove);
+		queue->blocks_in_queue--;
+	}
+	
+	/* add this element to the tail -- already incremented */
+#if 0
+	fprintf(stderr, "add element to old queue = %p\n", this_element);
+#endif
+	if(NULL == queue->head) {
+		/* empty queue */
+		assert(NULL == queue->tail);
+		queue->head = queue->tail = this_element;
+		this_element->next = this_element->prev = NULL;
+		assert(1 == queue->blocks_in_queue);
+	} else {
+		assert(queue->tail);	
+		this_element->prev = queue->tail;
+		queue->tail->next = this_element;
+		queue->tail = this_element;
+		this_element->next = NULL;
+	}
 }
 
 static void erase_queue(struct packet_queue *queue)
@@ -1352,12 +1381,52 @@ static void erase_queue(struct packet_queue *queue)
 	}
 }
 
-static void erase_pending_packets(struct tracers *this_tracer, struct packet_element *this_element)
+
+
+/* advance the queue -- and return number of non-peer (triggers?) if passed inner_filter */
+static int advance_queue_after_trigger(struct tracers *ptracer)
 {
+	int how_many;
+	int triggers_seen = 0;
+	struct packet_queue *queue;
+
+	queue = &ptracer->packet_queue;
+	if(queue->blocks_in_queue > prepend_queue)
+		how_many = prepend_queue;
+	else 	how_many = queue->blocks_in_queue/2;	// ??
+	
+	log_wtime("%s: remove %d\n", identify_tracer(ptracer),  how_many);
+
+	while(how_many > 0) {
+		struct packet_element *to_remove;
+
+		to_remove = unlink_head_element(queue);
+		assert(to_remove);
+		if(to_remove->passed_inner_filter && !to_remove->peer) 
+			triggers_seen++;
+		just_remove(ptracer, to_remove);
+		how_many--;
+	}
+
+	return triggers_seen;
+}
+
+static void erase_old_packets(struct tracers *this_tracer)
+{
+	int num_triggers;
+	struct packet_element *p;
+
 	/* erase old queues */
 	erase_queue(&wan->old_queue);
 	erase_queue(&lan->old_queue);
-	just_remove(this_tracer, this_element);
+
+	p =  unlink_head_element(&this_tracer->packet_queue);
+	if(p)
+		just_remove(this_tracer, p);
+	num_triggers = advance_queue_after_trigger(wan);
+	num_triggers += advance_queue_after_trigger(lan);
+	log_wtime("advance, seen %d triggers\n", num_triggers);
+	
 }
 
 /* look to see if this packet has a peer -- if not, write out to wireshark the prepend queue (emptying queue)
@@ -1384,7 +1453,7 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 
 
 		if( true == writing_mismatches) {
-			log_wtime("want to write, but writing mismatches\n");
+//			log_wtime("want to write, but writing mismatches\n");
 			just_remove(this_tracer, this_element);
 			return;
 		}
@@ -1394,9 +1463,10 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		switch(pid) {
 			default:
 				mismatch_number++;
+				trigger++;
 				writing_mismatches = true;
 				writing_pid = pid;
-				erase_pending_packets(this_tracer, this_element);
+				erase_old_packets(this_tracer);
 				return;
 			case -1:
 				log_wtime("fork failed: %s\n", strerror(errno));
@@ -1419,7 +1489,8 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		struct packet_element *to_remove;
 		struct packet_queue *queue;
 
-		log_wtime("pre lan = %d,  pre wan = %d, post lan = %d, post wan = %d\n", 
+		log_wtime("lan read = %d, wan read = %d, pre lan = %d,  pre wan = %d, post lan = %d, post wan = %d\n", 
+			lan->packets_read, wan->packets_read,
 			lan->old_queue.blocks_in_queue, wan->old_queue.blocks_in_queue,
 			lan->packet_queue.blocks_in_queue, wan->packet_queue.blocks_in_queue);
 				
@@ -1511,11 +1582,11 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		}
 		close(mismatched_packet_fd);
 		mismatched_packet_fd = -1;
-		mismatch_number++;	
 		gettimeofday(&stop, NULL);
 		timersub(&stop, &start, &delta);
 		log_wtime("time to write: %ld.%06ld\n", delta.tv_sec, delta.tv_usec);
-		kill(getppid(), SIGTERM);
+		if(mismatch_number > 3)
+			kill(getppid(), SIGTERM);
 		exit(0);
 	} else {
 		just_remove(this_tracer, this_element);
@@ -1601,6 +1672,7 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 		/* get rid of tail of queue */
 		struct packet_element *to_remove;
 
+#if 0
 		to_remove = this_queue->head;
 		assert(to_remove->prev == NULL);
 		this_queue->head = to_remove->next;
@@ -1613,7 +1685,11 @@ static void queue_packet(struct tracers *tracer, struct block_info *block)
 			this_queue->tail = NULL;
 		}
 		this_queue->blocks_in_queue--;
+#else
+		to_remove = unlink_head_element(this_queue);
+#endif
 		move_to_old_queue(tracer, to_remove);
+
 	}
 	
 	try_to_find_peer(tracer->wan, this_element);
@@ -2163,13 +2239,12 @@ static int timeout_a_queue(struct tracers *interface, struct timeval *timeout)
 		packets_timedout++;
 		
 	}
-#if 0
+#if 1
 	if(packets_timedout) 
 		fprintf(stderr, "Timed out %d packets in queue %s\n", packets_timedout, 
 					identify_tracer(interface)); 
-#else
-	return packets_timedout;
 #endif
+	return packets_timedout;
 }
 
 static void timeout_queues(void)
@@ -2191,7 +2266,7 @@ static void timeout_queues(void)
 		gettimeofday(&now, NULL);
 
 		if(verbose > 0) 
-			fprintf(stderr, "%ld.%06ld: lan timedout = %d, wan timedout = %d\n", 
+			log_wtime("%ld.%06ld: lan timedout = %d, wan timedout = %d\n", 
 							now.tv_sec, now.tv_usec, lan_timedout, wan_timedout);
 	}
 }

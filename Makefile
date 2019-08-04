@@ -2,20 +2,31 @@
 
 
 
+# USE_DMALLOC=true
 #  OPT=-O3
 CFLAGS=-g  -Wall ${OPT}
+ifdef USE_DMALLOC
+CFLAGS+=-DUSE_DMALLOC
+endif
 
 OBJS=main.o pcapreader.o
 
+
 ifdef MCHECK
-MCHECK_LIB=-lmcheck
+LDFLAGS-lmcheck
 endif
+
+ifdef USE_DMALLOC
+LDFLAGS=-ldmalloc
+endif
+
+
 
 PROGS=chox 
 
 all:	${PROGS}
 chox:	$(OBJS)
-	$(CC) -o $@ $^ -g   ${MCHECK_LIB}
+	$(CC) -o $@ $^ -g   ${LDFLAGS}
 
 pcapreader: pcapreader.c
 	${CC} -DDEBUG -o $@ $^ ${CFLAGS}
