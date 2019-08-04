@@ -1585,8 +1585,10 @@ static void move_to_old_queue(struct tracers *this_tracer, struct packet_element
 		gettimeofday(&stop, NULL);
 		timersub(&stop, &start, &delta);
 		log_wtime("time to write: %ld.%06ld\n", delta.tv_sec, delta.tv_usec);
+#if 0
 		if(mismatch_number > 3)
 			kill(getppid(), SIGTERM);
+#endif
 		exit(0);
 	} else {
 		just_remove(this_tracer, this_element);
