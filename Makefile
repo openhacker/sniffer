@@ -41,7 +41,7 @@ clean:
 install:
 	cp chox /usr/local/bin
 
-DEB_VERSION:=0.1-3
+DEB_VERSION:=0.1-4
 DEB_NAME:=chox-$(DEB_VERSION)
 
 deb:	all
